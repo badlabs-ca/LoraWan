@@ -4,13 +4,15 @@
 # Auto-detects environment and handles everything intelligently
 # Works on: Windows (PowerShell/Git Bash), Linux (Ubuntu/WSL), macOS
 
-set -e  # Exit on any error
+# set -e  # Exit on any error - DISABLED for better error handling
+# Instead, we'll handle errors manually where needed
 
 # Global configuration
 SCRIPT_VERSION="1.0.0"
 WORK_DIR="$HOME/rak_gateway_unified"
 CONFIG_FILE="$WORK_DIR/rak_unified_config.conf"
 LOG_FILE="$WORK_DIR/rak_unified.log"
+DEBUG_MODE="${DEBUG_RAK:-false}"  # Set DEBUG_RAK=true to enable debug mode
 
 # Colors for cross-platform output
 if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "$WINDIR" ]]; then
@@ -41,7 +43,18 @@ USB_METHOD=""
 # ============================================================================
 
 print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${BLUE}[INFO]${NC} $1"
+    local message="$1"
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        echo -e "${BLUE}[INFO]${NC} $message (Line: ${BASH_LINENO[1]})" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${BLUE}[INFO]${NC} $message"
+    else
+        echo -e "${BLUE}[INFO]${NC} $message" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${BLUE}[INFO]${NC} $message"
+    fi
+}
+
+print_debug() {
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} $1" | tee -a "$LOG_FILE" 2>/dev/null || echo -e "${YELLOW}[DEBUG]${NC} $1"
+    fi
 }
 
 print_success() {
@@ -57,8 +70,18 @@ print_error() {
 }
 
 init_logging() {
-    mkdir -p "$WORK_DIR" 2>/dev/null || true
-    echo "=== RAK Unified Manager Log - $(date) ===" >> "$LOG_FILE" 2>/dev/null || true
+    # Create work directory with better error handling
+    if ! mkdir -p "$WORK_DIR" 2>/dev/null; then
+        print_warning "Could not create work directory $WORK_DIR"
+        WORK_DIR="/tmp/rak_gateway_unified"
+        mkdir -p "$WORK_DIR" || WORK_DIR="."
+    fi
+    
+    # Try to write to log file, fallback if it fails
+    if ! echo "=== RAK Unified Manager Log - $(date) ===" >> "$LOG_FILE" 2>/dev/null; then
+        LOG_FILE="/tmp/rak_unified.log"
+        echo "=== RAK Unified Manager Log - $(date) ===" >> "$LOG_FILE" 2>/dev/null || LOG_FILE=""
+    fi
 }
 
 save_config() {
@@ -80,8 +103,12 @@ EOF
 
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
-        source "$CONFIG_FILE" 2>/dev/null || return 1
-        return 0
+        if source "$CONFIG_FILE" 2>/dev/null; then
+            return 0
+        else
+            print_warning "Config file exists but could not be loaded"
+            return 1
+        fi
     else
         return 1
     fi
@@ -93,15 +120,22 @@ load_config() {
 
 detect_operating_system() {
     print_status "Detecting operating system and environment..."
+    print_debug "OSTYPE: $OSTYPE"
     
-    # Detect OS
+    # Detect OS with better error handling
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         DETECTED_OS="LINUX"
+        print_debug "Linux detected, checking environment..."
+        
         # Check if it's WSL
         if grep -qi microsoft /proc/version 2>/dev/null; then
             DETECTED_ENV="WSL"
-        elif command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt -q; then
-            DETECTED_ENV="VM"
+        elif command -v systemd-detect-virt >/dev/null 2>&1; then
+            if systemd-detect-virt -q 2>/dev/null; then
+                DETECTED_ENV="VM"
+            else
+                DETECTED_ENV="NATIVE"
+            fi
         else
             DETECTED_ENV="NATIVE"
         fi
@@ -111,14 +145,19 @@ detect_operating_system() {
     elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "$WINDIR" ]]; then
         DETECTED_OS="WINDOWS"
         # Check if we can access WSL
-        if command -v wsl >/dev/null 2>&1 && wsl --status >/dev/null 2>&1; then
-            DETECTED_ENV="WINDOWS_WITH_WSL"
+        if command -v wsl >/dev/null 2>&1; then
+            if wsl --status >/dev/null 2>&1; then
+                DETECTED_ENV="WINDOWS_WITH_WSL"
+            else
+                DETECTED_ENV="WINDOWS_ONLY"
+            fi
         else
             DETECTED_ENV="WINDOWS_ONLY"
         fi
     else
         DETECTED_OS="UNKNOWN"
         DETECTED_ENV="UNKNOWN"
+        print_warning "Unknown operating system detected: $OSTYPE"
     fi
     
     print_success "Detected: $DETECTED_OS ($DETECTED_ENV)"
