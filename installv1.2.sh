@@ -6,7 +6,7 @@
 
 # Global configuration
 SCRIPT_VERSION="1.2.0-fixed"
-WORK_DIR="$HOME/rak_gateway_unified"
+WORK_DIR="$(pwd)"
 CONFIG_FILE="$WORK_DIR/rak_unified_config.conf"
 LOG_FILE="$WORK_DIR/rak_unified.log"
 DEBUG_MODE="${DEBUG_RAK:-false}"
