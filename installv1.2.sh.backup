@@ -901,7 +901,11 @@ exit_script() {
     exit 0
 }
 
+# Handle Ctrl+C gracefully
+trap 'echo -e "\n${YELLOW}[INFO]${NC} Script interrupted. Configuration saved."; save_config; exit 1' INT
 
+# Run main function
+main "$@"
 # ============================================================================
 # SIGNAL MONITORING FUNCTIONS
 # ============================================================================
@@ -977,9 +981,3 @@ test_decryption() {
     fi
     cd "$WORK_DIR" && python3 rak_signal_monitor.py test
 }
-
-# Handle Ctrl+C gracefully
-trap 'echo -e "\n${YELLOW}[INFO]${NC} Script interrupted. Configuration saved."; save_config; exit 1' INT
-
-# Run main function
-main "$@"
