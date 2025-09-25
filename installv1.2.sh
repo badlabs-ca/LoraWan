@@ -652,8 +652,8 @@ test_decryption() {
 show_enhanced_main_menu() {
     echo ""
     echo "=== RAK UNIFIED GATEWAY MANAGER v$SCRIPT_VERSION ==="
-    
-    if [[ "$INSTALLATION_STATUS" == *"INSTALLED"* ]] && [[ "$DEVICE_STATUS" == "FOUND"* ]]; then
+
+    if [[ "$INSTALLATION_STATUS" == "INSTALLED" ]] && [[ "$DEVICE_STATUS" == "FOUND"* ]]; then
         echo "🚀 GATEWAY OPERATIONS:"
         echo "1) Start packet forwarder"
         echo "2) Signal monitoring & analysis"
@@ -683,7 +683,7 @@ show_enhanced_main_menu() {
 }
 
 handle_enhanced_menu_choice() {
-    if [[ "$INSTALLATION_STATUS" == *"INSTALLED"* ]] && [[ "$DEVICE_STATUS" == "FOUND"* ]]; then
+    if [[ "$INSTALLATION_STATUS" == "INSTALLED" ]] && [[ "$DEVICE_STATUS" == "FOUND"* ]]; then
         read -p "Enter your choice (1-9): " choice
         case $choice in
             1) start_packet_forwarder ;;
