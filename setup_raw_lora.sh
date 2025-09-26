@@ -25,6 +25,10 @@ fi
 
 # Step 2: Backup original configuration
 echo "[2/5] Backing up original configuration..."
+
+# Get script directory BEFORE changing directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 cd "$PF_PATH"
 if [[ -f "global_conf.json" ]]; then
     cp global_conf.json global_conf.json.backup
@@ -35,7 +39,6 @@ fi
 
 # Step 3: Install raw LoRa configuration
 echo "[3/5] Installing raw LoRa configuration..."
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Look for config file in script directory
 CONFIG_FILE=""
