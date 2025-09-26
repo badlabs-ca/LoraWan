@@ -289,11 +289,32 @@ install_python() {
 
 create_signal_monitor_script() {
     print_status "Creating Python signal monitoring script..."
-    
+
     print_success "Python signal monitoring script available"
 
     chmod +x "$WORK_DIR/rak_signal_monitor.py"
     print_success "Signal monitoring script created"
+}
+
+create_raw_lora_script() {
+    print_status "Creating raw LoRa capture script..."
+
+    # Check if raw_lora_capture.py already exists in the directory
+    if [[ -f "$WORK_DIR/raw_lora_capture.py" ]]; then
+        print_success "Raw LoRa capture script already exists"
+        return 0
+    fi
+
+    # Copy from Gateway directory if it exists
+    if [[ -f "$(dirname "$0")/raw_lora_capture.py" ]]; then
+        cp "$(dirname "$0")/raw_lora_capture.py" "$WORK_DIR/"
+        chmod +x "$WORK_DIR/raw_lora_capture.py"
+        print_success "Raw LoRa capture script copied and configured"
+    else
+        print_error "raw_lora_capture.py not found in Gateway directory"
+        print_status "Please ensure raw_lora_capture.py is in the same directory as this script"
+        return 1
+    fi
 }
 
 create_monitoring_wrapper() {
@@ -912,19 +933,21 @@ handle_signal_monitoring() {
     echo "1) Basic signal monitor (all LoRa traffic)"
     echo "2) My device monitor (filtered + decryption)"
     echo "3) All devices monitor (advanced analysis)"
-    echo "4) Configure device keys"
-    echo "5) Test decryption"
-    echo "6) Back to main menu"
+    echo "4) Raw LoRa capture (Sensorite V4 mode)"
+    echo "5) Configure device keys"
+    echo "6) Test decryption"
+    echo "7) Back to main menu"
     echo ""
-    read -p "Enter your choice (1-6): " choice
-    
+    read -p "Enter your choice (1-7): " choice
+
     case $choice in
         1) start_basic_monitoring ;;
         2) start_device_monitoring ;;
         3) start_all_devices_monitoring ;;
-        4) configure_device_keys ;;
-        5) test_decryption ;;
-        6) return ;;
+        4) start_raw_lora_capture ;;
+        5) configure_device_keys ;;
+        6) test_decryption ;;
+        7) return ;;
         *) print_error "Invalid choice" ;;
     esac
 }
@@ -960,6 +983,64 @@ start_all_devices_monitoring() {
         create_monitoring_wrapper
     fi
     cd "$WORK_DIR" && ./monitor_all_devices.sh
+}
+
+start_raw_lora_capture() {
+    print_status "Starting raw LoRa capture for Sensorite V4..."
+
+    # Check if raw_lora_capture.py exists
+    if [[ ! -f "$WORK_DIR/raw_lora_capture.py" ]]; then
+        print_status "Creating raw LoRa capture script..."
+        create_raw_lora_script
+    fi
+
+    # Ensure Python tools are installed
+    if [[ "$PYTHON_TOOLS_INSTALLED" != "true" ]]; then
+        print_status "Installing Python tools first..."
+        install_python_dependencies
+    fi
+
+    echo ""
+    echo "🎯 RAW LORA CAPTURE MODE"
+    echo "This mode captures raw LoRa packets from Sensorite V4 devices"
+    echo "No LoRaWAN network server required"
+    echo ""
+    echo "Options:"
+    echo "1) Monitor Sensorite V4 only (filtered)"
+    echo "2) Monitor all raw LoRa traffic"
+    echo "3) Test with sample data"
+    echo ""
+    read -p "Enter your choice (1-3): " raw_choice
+
+    cd "$WORK_DIR"
+    case $raw_choice in
+        1)
+            print_status "Monitoring Sensorite V4 devices only..."
+            # Monitor packet forwarder output and pipe to raw capture
+            if [[ "$INSTALLATION_STATUS" == "INSTALLED" ]]; then
+                cd "$INSTALL_PATH/packet_forwarder"
+                sudo ./lora_pkt_fwd | python3 "$WORK_DIR/raw_lora_capture.py"
+            else
+                print_error "Packet forwarder not installed. Run main installation first."
+            fi
+            ;;
+        2)
+            print_status "Monitoring all raw LoRa traffic..."
+            if [[ "$INSTALLATION_STATUS" == "INSTALLED" ]]; then
+                cd "$INSTALL_PATH/packet_forwarder"
+                sudo ./lora_pkt_fwd | python3 "$WORK_DIR/raw_lora_capture.py" all
+            else
+                print_error "Packet forwarder not installed. Run main installation first."
+            fi
+            ;;
+        3)
+            print_status "Testing with sample data..."
+            python3 "$WORK_DIR/raw_lora_capture.py" test
+            ;;
+        *)
+            print_error "Invalid choice"
+            ;;
+    esac
 }
 
 configure_device_keys() {
