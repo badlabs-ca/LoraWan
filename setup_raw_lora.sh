@@ -9,7 +9,7 @@ echo "[1/5] Checking packet forwarder installation..."
 PF_PATH=""
 
 # Find packet forwarder installation
-for path in ~/sx1302_hal*/packet_forwarder ~/rak_gateway_setup/sx1302_hal*/packet_forwarder /opt/*/packet_forwarder; do
+for path in ~/sx1302_hal*/packet_forwarder ~/rak_gateway_setup/sx1302_hal*/packet_forwarder ~/sensorite/LoraWan/sx1302_hal/packet_forwarder /opt/*/packet_forwarder; do
     if [[ -f "$path/lora_pkt_fwd" ]]; then
         PF_PATH="$path"
         echo "✅ Found packet forwarder at: $path"
@@ -72,7 +72,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Find packet forwarder
 PF_PATH=""
-for path in ~/sx1302_hal*/packet_forwarder ~/rak_gateway_setup/sx1302_hal*/packet_forwarder /opt/*/packet_forwarder; do
+for path in ~/sx1302_hal*/packet_forwarder ~/rak_gateway_setup/sx1302_hal*/packet_forwarder ~/sensorite/LoraWan/sx1302_hal/packet_forwarder /opt/*/packet_forwarder; do
     if [[ -f "$path/lora_pkt_fwd" ]]; then
         PF_PATH="$path"
         break
