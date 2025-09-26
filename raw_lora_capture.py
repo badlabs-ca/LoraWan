@@ -33,28 +33,59 @@ class RawLoRaCapture:
     def parse_raw_lora_packet(self, line):
         """Extract raw LoRa packet information from gateway output"""
         try:
-            # Look for JSON data in the line
+            # Look for JSON data in the line (standard LoRaWAN format)
             json_match = re.search(r'\\{"rxpk":\\[.*?\\]\\}', line)
-            if not json_match:
-                return None
+            if json_match:
+                packet_data = json.loads(json_match.group())
+                if 'rxpk' in packet_data and packet_data['rxpk']:
+                    rxpk = packet_data['rxpk'][0]  # First packet
+                    return {
+                        'timestamp': rxpk.get('time', ''),
+                        'frequency': rxpk.get('freq', 0),
+                        'rssi': rxpk.get('rssi', 0),
+                        'lsnr': rxpk.get('lsnr', 0),
+                        'datarate': rxpk.get('datr', ''),
+                        'size': rxpk.get('size', 0),
+                        'data': rxpk.get('data', ''),
+                        'channel': rxpk.get('chan', 0),
+                        'packet_type': 'lorawan'
+                    }
 
-            packet_data = json.loads(json_match.group())
-            if 'rxpk' not in packet_data or not packet_data['rxpk']:
-                return None
+            # Look for raw LoRa packet format (modified packet forwarder)
+            # Format: RXPK,timestamp,freq,rssi,lsnr,sf,bw,cr,size,data
+            if line.startswith('RXPK,'):
+                parts = line.strip().split(',')
+                if len(parts) >= 10:
+                    return {
+                        'timestamp': parts[1],
+                        'frequency': float(parts[2]),
+                        'rssi': int(parts[3]),
+                        'lsnr': float(parts[4]),
+                        'datarate': f"SF{parts[5]}BW{parts[6]}",
+                        'size': int(parts[8]),
+                        'data': parts[9],
+                        'channel': 0,
+                        'packet_type': 'raw_lora'
+                    }
 
-            rxpk = packet_data['rxpk'][0]  # First packet
+            # Alternative: Look for packet forwarder debug output
+            # Format: "INFO: [RAW] freq=915.2 rssi=-89 snr=8.5 size=26 data=535300050033..."
+            raw_match = re.search(r'INFO: \\[RAW\\] freq=([0-9.]+) rssi=(-?[0-9]+) snr=(-?[0-9.]+) size=([0-9]+) data=([A-Fa-f0-9]+)', line)
+            if raw_match:
+                return {
+                    'timestamp': datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                    'frequency': float(raw_match.group(1)),
+                    'rssi': int(raw_match.group(2)),
+                    'lsnr': float(raw_match.group(3)),
+                    'datarate': "SF7BW125",  # Default for V4
+                    'size': int(raw_match.group(4)),
+                    'data': base64.b64encode(bytes.fromhex(raw_match.group(5))).decode(),
+                    'channel': 0,
+                    'packet_type': 'raw_debug'
+                }
 
-            return {
-                'timestamp': rxpk.get('time', ''),
-                'frequency': rxpk.get('freq', 0),
-                'rssi': rxpk.get('rssi', 0),
-                'lsnr': rxpk.get('lsnr', 0),
-                'datarate': rxpk.get('datr', ''),
-                'size': rxpk.get('size', 0),
-                'data': rxpk.get('data', ''),
-                'channel': rxpk.get('chan', 0)
-            }
-        except (json.JSONDecodeError, KeyError, IndexError):
+            return None
+        except (json.JSONDecodeError, KeyError, IndexError, ValueError):
             return None
 
     def is_sensorite_packet(self, packet_info):
