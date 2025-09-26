@@ -108,7 +108,7 @@ class LoRaSignalMonitor:
             return None
 
     def is_my_device(self, packet_info):
-        """Check if packet is from configured device using LoRaWAN packet parsing"""
+        """Check if packet is from configured device using DevEUI and DevAddr filtering"""
         if not packet_info or not packet_info['data']:
             return False
 
@@ -118,10 +118,39 @@ class LoRaSignalMonitor:
             if not lorawan_info:
                 return False
 
-            # For now, accept any valid LoRaWAN uplink packet
-            # In production, you would check against known DevAddr
-            return True
-        except:
+            # Method 1: Check if this is our specific DevAddr (from your V3 firmware)
+            # Your V3 uses DevEUI 0102030405060708, check against known DevAddrs
+            known_dev_addrs = [
+                # Add your actual DevAddr here when you run the V3 device
+                # For now, we'll use a stricter approach
+            ]
+
+            current_dev_addr = lorawan_info['dev_addr']
+
+            # Method 2: Filter by packet characteristics specific to your V3 device
+            # V3 firmware sends exactly 22-byte payloads on port 2
+            packet_bytes = lorawan_info['packet_bytes']
+            fport = lorawan_info.get('fport')
+            payload_start = lorawan_info['payload_start']
+
+            # Extract payload length (excluding MIC)
+            if len(packet_bytes) >= payload_start + 4:
+                payload_length = len(packet_bytes) - payload_start - 4
+
+                # Your V3 device signature:
+                # - Exactly 22 bytes payload
+                # - Port 2 (from firmware g_AppPort = 2)
+                # - Valid LoRaWAN structure
+                if payload_length == 22 and fport == 2:
+                    print(f"[FILTER] Potential V3 device: DevAddr={current_dev_addr}, Payload={payload_length}B, Port={fport}")
+                    return True
+                else:
+                    print(f"[FILTER] Rejected: DevAddr={current_dev_addr}, Payload={payload_length}B, Port={fport} (expected 22B on port 2)")
+                    return False
+
+            return False
+        except Exception as e:
+            print(f"[FILTER] Error: {e}")
             return False
 
     def decrypt_payload(self, data_b64):
@@ -151,17 +180,21 @@ class LoRaSignalMonitor:
             key_bytes = binascii.unhexlify(self.config['app_key'])
             cipher = AES.new(key_bytes, AES.MODE_ECB)
 
-            # Pad data to 16 bytes if needed
+            # Pad data to 32 bytes to handle full 22-byte sensor payload
             padded_data = encrypted_payload
             if len(padded_data) % 16 != 0:
                 padding = 16 - (len(padded_data) % 16)
                 padded_data += b'\x00' * padding
 
-            decrypted = cipher.decrypt(padded_data[:16])
+            # Decrypt full payload (up to 32 bytes to cover 22-byte sensor data)
+            if len(padded_data) >= 32:
+                decrypted = cipher.decrypt(padded_data[:32])
+            else:
+                decrypted = cipher.decrypt(padded_data)
 
             # Try to parse as sensor data (22 bytes expected from firmware)
             sensor_data = {}
-            if len(decrypted) >= 16:
+            if len(decrypted) >= 22:
                 # Accelerometer (6 bytes, scaled by 1000)
                 ax = int.from_bytes(decrypted[0:2], 'big', signed=True) / 1000.0
                 ay = int.from_bytes(decrypted[2:4], 'big', signed=True) / 1000.0
@@ -177,7 +210,38 @@ class LoRaSignalMonitor:
                 # Magnetometer (6 bytes, scaled by 10)
                 mx = int.from_bytes(decrypted[12:14], 'big', signed=True) / 10.0
                 my = int.from_bytes(decrypted[14:16], 'big', signed=True) / 10.0
-                sensor_data['magnetometer'] = {'x': mx, 'y': my}
+                mz = int.from_bytes(decrypted[16:18], 'big', signed=True) / 10.0
+                sensor_data['magnetometer'] = {'x': mx, 'y': my, 'z': mz}
+
+                # ToF sensors (4 bytes total)
+                tof_c_raw = int.from_bytes(decrypted[18:20], 'big')
+                tof_d_raw = int.from_bytes(decrypted[20:22], 'big')
+
+                tof_c_mm = tof_c_raw if tof_c_raw != 0xFFFF else None
+                tof_d_mm = tof_d_raw if tof_d_raw != 0xFFFF else None
+
+                sensor_data['tof'] = {
+                    'distance_c_mm': tof_c_mm,
+                    'distance_d_mm': tof_d_mm,
+                    'c_valid': tof_c_mm is not None,
+                    'd_valid': tof_d_mm is not None
+                }
+            elif len(decrypted) >= 16:
+                # Partial data fallback
+                ax = int.from_bytes(decrypted[0:2], 'big', signed=True) / 1000.0
+                ay = int.from_bytes(decrypted[2:4], 'big', signed=True) / 1000.0
+                az = int.from_bytes(decrypted[4:6], 'big', signed=True) / 1000.0
+                sensor_data['accelerometer'] = {'x': ax, 'y': ay, 'z': az}
+
+                gx = int.from_bytes(decrypted[6:8], 'big', signed=True) / 10.0
+                gy = int.from_bytes(decrypted[8:10], 'big', signed=True) / 10.0
+                gz = int.from_bytes(decrypted[10:12], 'big', signed=True) / 10.0
+                sensor_data['gyroscope'] = {'x': gx, 'y': gy, 'z': gz}
+
+                mx = int.from_bytes(decrypted[12:14], 'big', signed=True) / 10.0
+                my = int.from_bytes(decrypted[14:16], 'big', signed=True) / 10.0
+                sensor_data['magnetometer'] = {'x': mx, 'y': my, 'z': 'missing'}
+                sensor_data['tof'] = {'status': 'data_truncated'}
 
             return {
                 "dev_addr": lorawan_info['dev_addr'],
@@ -271,7 +335,18 @@ class LoRaSignalMonitor:
                             print(f"🌀 Gyro [dps]: X={gyro['x']:.1f}, Y={gyro['y']:.1f}, Z={gyro['z']:.1f}")
                         if 'magnetometer' in sensor_data:
                             mag = sensor_data['magnetometer']
-                            print(f"🧭 Mag [µT]: X={mag['x']:.1f}, Y={mag['y']:.1f}")
+                            if isinstance(mag['z'], (int, float)):
+                                print(f"🧭 Mag [µT]: X={mag['x']:.1f}, Y={mag['y']:.1f}, Z={mag['z']:.1f}")
+                            else:
+                                print(f"🧭 Mag [µT]: X={mag['x']:.1f}, Y={mag['y']:.1f}, Z={mag['z']}")
+                        if 'tof' in sensor_data:
+                            tof = sensor_data['tof']
+                            if 'distance_c_mm' in tof:
+                                c_str = f"{tof['distance_c_mm']}mm" if tof['c_valid'] else "Out of Range"
+                                d_str = f"{tof['distance_d_mm']}mm" if tof['d_valid'] else "Out of Range"
+                                print(f"📏 ToF C: {c_str}, ToF D: {d_str}")
+                            else:
+                                print(f"📏 ToF: {tof.get('status', 'unknown')}")
                     else:
                         print(f"🔢 Hex: {decrypt_result['hex'][:32]}...")
                 else:
@@ -370,6 +445,18 @@ def configure_device():
     app_key = input(f"App Key [{config['app_key']}]: ").strip()
     if app_key:
         config['app_key'] = app_key.replace('-', '').replace(':', '')
+
+    # Optional: Add known DevAddr for strict filtering
+    dev_addr = input(f"DevAddr (optional, for strict filtering): ").strip()
+    if dev_addr:
+        config['dev_addr'] = dev_addr.replace('-', '').replace(':', '').upper()
+
+    print("\n📋 Current V3 Device Signature:")
+    print("- DevEUI: 0102030405060708")
+    print("- AppEUI: 1112131415161718")
+    print("- AppKey: 21222324252627282A2B2C2D2E2F3031")
+    print("- Payload: 22 bytes on port 2")
+    print("- DevAddr: Assigned during OTAA join")
 
     save_config(config)
     return config

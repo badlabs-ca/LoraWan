@@ -66,7 +66,7 @@ def parse_lorawan_packet(payload_b64):
 
 def check_device_match(json_line):
     """
-    Check if the LoRa packet matches our device using LoRaWAN packet parsing
+    Check if the LoRa packet matches our V3 device using specific filtering
     """
     # Extract the data payload
     if '"data":"' not in json_line:
@@ -86,13 +86,28 @@ def check_device_match(json_line):
         if not packet_info:
             return False
 
-        # For now, accept any valid LoRaWAN uplink packet
-        # In production, you would check against known DevAddr or use OTAA session info
-        print(f"Found LoRaWAN packet: DevAddr={packet_info['dev_addr']}, FCnt={packet_info['fcnt']}")
+        current_dev_addr = packet_info['dev_addr']
+        fport = packet_info.get('fport')
+        packet_bytes = packet_info['packet_bytes']
+        payload_start = packet_info['payload_start']
 
-        # Could add DevAddr filtering here if you know the assigned DevAddr
-        # For testing, we'll accept any valid packet from the expected region/frequency
-        return True
+        print(f"Found LoRaWAN packet: DevAddr={current_dev_addr}, FCnt={packet_info['fcnt']}, FPort={fport}")
+
+        # Filter for V3 device signature:
+        # - Exactly 22 bytes payload (sensor data)
+        # - Port 2 (from V3 firmware g_AppPort = 2)
+        if len(packet_bytes) >= payload_start + 4:
+            payload_length = len(packet_bytes) - payload_start - 4
+
+            if payload_length == 22 and fport == 2:
+                print(f"✓ MATCHED V3 device signature: 22-byte payload on port 2")
+                return True
+            else:
+                print(f"✗ Not V3 device: {payload_length}B payload on port {fport} (expected 22B on port 2)")
+                return False
+
+        print(f"✗ Packet too short for V3 device")
+        return False
 
     except Exception as e:
         print(f"Error parsing packet: {e}")
@@ -139,19 +154,22 @@ def decrypt_payload(base64_data, device_matched=True):
         key_bytes = binascii.unhexlify(APP_KEY)
         cipher = AES.new(key_bytes, AES.MODE_ECB)
 
-        # Pad data to 16 bytes if needed
+        # Pad data to 32 bytes to handle full 22-byte sensor payload
         padded_data = encrypted_payload
         if len(padded_data) % 16 != 0:
             padding = 16 - (len(padded_data) % 16)
             padded_data += b"\x00" * padding
 
-        # Decrypt
-        decrypted = cipher.decrypt(padded_data[:16])
+        # Decrypt full payload (up to 32 bytes to cover 22-byte sensor data)
+        if len(padded_data) >= 32:
+            decrypted = cipher.decrypt(padded_data[:32])
+        else:
+            decrypted = cipher.decrypt(padded_data)
         print(f"Decrypted hex: {decrypted.hex()}")
 
         # Try to parse as sensor data (22 bytes expected from firmware)
-        if len(decrypted) >= 16:
-            print("\n=== Sensor Data Analysis ===")
+        if len(decrypted) >= 22:
+            print("\n=== Complete Sensor Data Analysis ===")
             # Accelerometer (6 bytes, scaled by 1000)
             ax = int.from_bytes(decrypted[0:2], 'big', signed=True) / 1000.0
             ay = int.from_bytes(decrypted[2:4], 'big', signed=True) / 1000.0
@@ -167,7 +185,39 @@ def decrypt_payload(base64_data, device_matched=True):
             # Magnetometer (6 bytes, scaled by 10)
             mx = int.from_bytes(decrypted[12:14], 'big', signed=True) / 10.0
             my = int.from_bytes(decrypted[14:16], 'big', signed=True) / 10.0
-            print(f"Magnetometer [µT]: X={mx:.1f}, Y={my:.1f}")
+            mz = int.from_bytes(decrypted[16:18], 'big', signed=True) / 10.0
+            print(f"Magnetometer [µT]: X={mx:.1f}, Y={my:.1f}, Z={mz:.1f}")
+
+            # ToF sensors (4 bytes total)
+            tof_c_raw = int.from_bytes(decrypted[18:20], 'big')
+            tof_d_raw = int.from_bytes(decrypted[20:22], 'big')
+
+            tof_c_mm = tof_c_raw if tof_c_raw != 0xFFFF else None
+            tof_d_mm = tof_d_raw if tof_d_raw != 0xFFFF else None
+
+            tof_c_str = f"{tof_c_mm}mm" if tof_c_mm is not None else "Out of Range"
+            tof_d_str = f"{tof_d_mm}mm" if tof_d_mm is not None else "Out of Range"
+
+            print(f"ToF Distance C: {tof_c_str}")
+            print(f"ToF Distance D: {tof_d_str}")
+        elif len(decrypted) >= 16:
+            print("\n=== Partial Sensor Data (16 bytes) ===")
+            # Accelerometer (6 bytes, scaled by 1000)
+            ax = int.from_bytes(decrypted[0:2], 'big', signed=True) / 1000.0
+            ay = int.from_bytes(decrypted[2:4], 'big', signed=True) / 1000.0
+            az = int.from_bytes(decrypted[4:6], 'big', signed=True) / 1000.0
+            print(f"Accelerometer [g]: X={ax:.3f}, Y={ay:.3f}, Z={az:.3f}")
+
+            # Gyroscope (6 bytes, scaled by 10)
+            gx = int.from_bytes(decrypted[6:8], 'big', signed=True) / 10.0
+            gy = int.from_bytes(decrypted[8:10], 'big', signed=True) / 10.0
+            gz = int.from_bytes(decrypted[10:12], 'big', signed=True) / 10.0
+            print(f"Gyroscope [dps]: X={gx:.1f}, Y={gy:.1f}, Z={gz:.1f}")
+
+            # Partial magnetometer (4 bytes available)
+            mx = int.from_bytes(decrypted[12:14], 'big', signed=True) / 10.0
+            my = int.from_bytes(decrypted[14:16], 'big', signed=True) / 10.0
+            print(f"Magnetometer [µT]: X={mx:.1f}, Y={my:.1f} (Z and ToF data missing)")
 
         return decrypted
 
