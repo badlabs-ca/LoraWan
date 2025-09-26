@@ -35,20 +35,19 @@ fi
 
 # Step 3: Install raw LoRa configuration
 echo "[3/5] Installing raw LoRa configuration..."
-ORIGINAL_DIR="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Change to packet forwarder directory
-cd "$PF_PATH"
-
-# Look for config file in script directory and original directory
+# Look for config file in script directory
 CONFIG_FILE=""
-for config_path in "$SCRIPT_DIR/global_conf_raw_lora.json" "$ORIGINAL_DIR/global_conf_raw_lora.json"; do
+for config_path in "$SCRIPT_DIR/global_conf_raw_lora.json"; do
     if [[ -f "$config_path" ]]; then
         CONFIG_FILE="$config_path"
         break
     fi
 done
+
+# Change to packet forwarder directory
+cd "$PF_PATH"
 
 if [[ -n "$CONFIG_FILE" ]]; then
     cp "$CONFIG_FILE" global_conf.json
@@ -57,8 +56,7 @@ else
     echo "❌ Raw LoRa configuration file not found!"
     echo "Searched in:"
     echo "  - $SCRIPT_DIR/global_conf_raw_lora.json"
-    echo "  - ./global_conf_raw_lora.json"
-    echo "  - $(pwd)/global_conf_raw_lora.json"
+    echo "Make sure global_conf_raw_lora.json is in the same directory as this script"
     exit 1
 fi
 
