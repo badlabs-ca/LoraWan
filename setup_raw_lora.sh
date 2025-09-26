@@ -76,7 +76,7 @@ done
 
 # Step 5: Create monitoring script
 echo "[5/5] Creating monitoring wrapper..."
-cat > "$SCRIPT_DIR/start_v4_capture.sh" << 'EOF'
+cat > "$SCRIPT_DIR/start_v4_capture.sh" << 'INNER_EOF'
 #!/bin/bash
 # Start Sensorite V4 raw LoRa capture
 
@@ -107,7 +107,7 @@ echo ""
 
 cd "$PF_PATH"
 sudo ./lora_pkt_fwd | python3 "$SCRIPT_DIR/raw_lora_capture.py"
-EOF
+INNER_EOF
 
 chmod +x "$SCRIPT_DIR/start_v4_capture.sh"
 
