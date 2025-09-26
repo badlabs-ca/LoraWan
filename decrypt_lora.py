@@ -93,17 +93,17 @@ def check_device_match(json_line):
 
         print(f"Found LoRaWAN packet: DevAddr={current_dev_addr}, FCnt={packet_info['fcnt']}, FPort={fport}")
 
-        # Filter for V3 device signature:
+        # TEMPORARY: Filter for V3 device signature (PORT FILTER REMOVED)
         # - Exactly 22 bytes payload (sensor data)
-        # - Port 2 (from V3 firmware g_AppPort = 2)
+        # - Any port (to identify actual port used)
         if len(packet_bytes) >= payload_start + 4:
             payload_length = len(packet_bytes) - payload_start - 4
 
-            if payload_length == 22 and fport == 2:
-                print(f"✓ MATCHED V3 device signature: 22-byte payload on port 2")
+            if payload_length == 22:
+                print(f"✓ MATCHED V3 device signature: 22-byte payload on port {fport}")
                 return True
             else:
-                print(f"✗ Not V3 device: {payload_length}B payload on port {fport} (expected 22B on port 2)")
+                print(f"✗ Not V3 device: {payload_length}B payload on port {fport} (expected 22B on any port)")
                 return False
 
         print(f"✗ Packet too short for V3 device")

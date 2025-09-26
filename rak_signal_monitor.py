@@ -137,15 +137,15 @@ class LoRaSignalMonitor:
             if len(packet_bytes) >= payload_start + 4:
                 payload_length = len(packet_bytes) - payload_start - 4
 
-                # Your V3 device signature:
+                # TEMPORARY: V3 device signature (PORT FILTER REMOVED)
                 # - Exactly 22 bytes payload
-                # - Port 2 (from firmware g_AppPort = 2)
+                # - Any port (to identify actual port used)
                 # - Valid LoRaWAN structure
-                if payload_length == 22 and fport == 2:
-                    print(f"[FILTER] Potential V3 device: DevAddr={current_dev_addr}, Payload={payload_length}B, Port={fport}")
+                if payload_length == 22:
+                    print(f"[FILTER] ✓ MATCHED V3 device: DevAddr={current_dev_addr}, Payload={payload_length}B, Port={fport}")
                     return True
                 else:
-                    print(f"[FILTER] Rejected: DevAddr={current_dev_addr}, Payload={payload_length}B, Port={fport} (expected 22B on port 2)")
+                    print(f"[FILTER] Rejected: DevAddr={current_dev_addr}, Payload={payload_length}B, Port={fport} (expected 22B on any port)")
                     return False
 
             return False
