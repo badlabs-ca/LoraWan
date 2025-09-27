@@ -1,16 +1,18 @@
 #!/bin/bash
 
-# ChirpStack Manager Script for Debian (Enhanced Version)
-# This script handles Docker issues automatically and installs Firefox if needed
+# ChirpStack Manager Script for Debian (Complete Fixed Version)
+# This script handles all Docker issues, creates proper configurations, and manages ChirpStack
 
 CHIRPSTACK_DIR="$HOME/chirpstack"
 DOCKER_COMPOSE_FILE="$CHIRPSTACK_DIR/docker-compose.yml"
+CONFIG_DIR="$CHIRPSTACK_DIR/configuration"
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Function to print colored output
@@ -30,6 +32,14 @@ print_header() {
     echo -e "${BLUE}================================================${NC}"
     echo -e "${BLUE}$1${NC}"
     echo -e "${BLUE}================================================${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_fail() {
+    echo -e "${RED}✗${NC} $1"
 }
 
 # Function to check if Docker is installed
@@ -64,32 +74,60 @@ test_docker_daemon() {
     return 1
 }
 
+# Function to wait for service to be ready
+wait_for_service() {
+    local service_name="$1"
+    local port="$2"
+    local max_attempts=30
+    local attempt=1
+    
+    print_status "Waiting for $service_name to be ready on port $port..."
+    
+    while [ $attempt -le $max_attempts ]; do
+        if nc -z localhost $port 2>/dev/null; then
+            print_success "$service_name is ready!"
+            return 0
+        fi
+        
+        echo -n "."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    
+    echo ""
+    print_error "$service_name failed to start within expected time"
+    return 1
+}
+
 # Enhanced Docker management function
 manage_docker() {
-    print_header "Docker System Check"
+    print_header "Docker System Management"
     
     # Check if Docker is installed
     if ! check_docker_installed; then
         print_warning "Docker is not installed. Installing now..."
         install_docker
-        return $?
+        if [ $? -ne 0 ]; then
+            return 1
+        fi
     else
-        print_status "✓ Docker is installed ($(docker --version))"
+        print_success "Docker is installed ($(docker --version | cut -d' ' -f3 | cut -d',' -f1))"
     fi
     
     # Check if Docker service is running
     if ! check_docker_running; then
         print_warning "Docker service is not running. Starting now..."
         sudo systemctl start docker
+        sleep 3
         if check_docker_running; then
-            print_status "✓ Docker service started successfully"
+            print_success "Docker service started"
         else
-            print_error "✗ Failed to start Docker service"
+            print_fail "Failed to start Docker service"
             print_error "Try running: sudo systemctl status docker"
             return 1
         fi
     else
-        print_status "✓ Docker service is running"
+        print_success "Docker service is running"
     fi
     
     # Enable Docker to start on boot
@@ -102,102 +140,30 @@ manage_docker() {
     if ! check_docker_permissions; then
         print_warning "User $USER is not in docker group. Adding now..."
         sudo usermod -aG docker $USER
-        print_warning "Group added. You may need to log out and back in for changes to take effect."
-        print_status "Applying group changes for current session..."
-        newgrp docker <<EOF
-        echo "Docker group applied!"
-EOF
+        print_warning "You may need to log out and back in, or run: newgrp docker"
+        
+        # Try to apply group in current session
+        if ! test_docker_daemon; then
+            print_status "Attempting to apply docker group for current session..."
+            exec sg docker "$0 $*"
+        fi
     else
-        print_status "✓ User has Docker permissions"
+        print_success "User has Docker permissions"
     fi
     
     # Test Docker daemon connection
-    sleep 2  # Give Docker a moment to fully start
+    sleep 2
     if ! test_docker_daemon; then
-        print_warning "Testing Docker daemon connection..."
-        # Try with newgrp docker
-        if ! docker ps &> /dev/null; then
-            print_error "✗ Cannot connect to Docker daemon"
-            print_error "You may need to log out and back in, or run: newgrp docker"
-            return 1
-        fi
-    fi
-    
-    print_status "✓ Docker is fully operational"
-    return 0
-}
-
-# Function to check and install Firefox
-check_and_install_firefox() {
-    print_header "Browser Check"
-    
-    # Check if any browser is available
-    local browsers=("firefox" "firefox-esr" "chromium" "google-chrome" "xdg-open")
-    local browser_found=false
-    
-    for browser in "${browsers[@]}"; do
-        if command -v "$browser" &> /dev/null; then
-            print_status "✓ Browser found: $browser"
-            browser_found=true
-            break
-        fi
-    done
-    
-    if ! $browser_found; then
-        print_warning "No suitable browser found. Installing Firefox..."
-        
-        # Check if we should install from Mozilla repository for newer version
-        read -p "Install Firefox from Mozilla (newer) or Debian repository (stable)? (m/d): " choice
-        
-        if [[ $choice == "m" || $choice == "M" ]]; then
-            install_firefox_mozilla
-        else
-            install_firefox_debian
-        fi
-    fi
-}
-
-# Function to install Firefox from Debian repository
-install_firefox_debian() {
-    print_status "Installing Firefox from Debian repository..."
-    sudo apt update
-    sudo apt install -y firefox-esr
-    
-    if command -v firefox-esr &> /dev/null; then
-        print_status "✓ Firefox ESR installed successfully"
-    else
-        print_error "✗ Firefox installation failed"
+        print_fail "Cannot connect to Docker daemon"
+        print_error "You may need to:"
+        print_error "1. Log out and back in"
+        print_error "2. Run: newgrp docker"
+        print_error "3. Reboot your system"
         return 1
     fi
-}
-
-# Function to install Firefox from Mozilla repository
-install_firefox_mozilla() {
-    print_status "Installing Firefox from Mozilla repository..."
     
-    # Install prerequisites
-    sudo apt update
-    sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
-    
-    # Add Mozilla's GPG key
-    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | sudo apt-key add -
-    
-    # Add Mozilla repository
-    echo "deb https://packages.mozilla.org/apt mozilla main" | sudo tee /etc/apt/sources.list.d/mozilla.list > /dev/null
-    
-    # Set package priority
-    echo 'Package: * Pin: origin packages.mozilla.org Pin-Priority: 1000' | sudo tee /etc/apt/preferences.d/mozilla > /dev/null
-    
-    # Install Firefox
-    sudo apt update
-    sudo apt install -y firefox
-    
-    if command -v firefox &> /dev/null; then
-        print_status "✓ Firefox installed successfully from Mozilla"
-    else
-        print_error "✗ Firefox installation failed, trying Debian version..."
-        install_firefox_debian
-    fi
+    print_success "Docker is fully operational"
+    return 0
 }
 
 # Function to install Docker on Debian
@@ -207,13 +173,16 @@ install_docker() {
     print_status "Updating package list..."
     sudo apt update
     
+    print_status "Installing prerequisites..."
+    sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release software-properties-common
+    
     print_status "Installing Docker and Docker Compose..."
     sudo apt install -y docker.io docker-compose
     
     if check_docker_installed; then
-        print_status "✓ Docker installed successfully"
+        print_success "Docker installed successfully"
         
-        print_status "Starting Docker service..."
+        print_status "Configuring Docker service..."
         sudo systemctl start docker
         sudo systemctl enable docker
         
@@ -223,27 +192,23 @@ install_docker() {
         print_warning "Group changes applied. You may need to log out and back in."
         return 0
     else
-        print_error "✗ Docker installation failed"
-        print_status "Trying alternative installation method..."
+        print_error "Docker installation failed, trying official repository..."
         install_docker_official
     fi
 }
 
 # Function to install Docker from official repository
 install_docker_official() {
-    print_status "Installing Docker from official repository..."
+    print_status "Installing Docker from official Docker repository..."
     
-    # Remove any existing Docker
+    # Remove existing Docker packages
     sudo apt remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
-    
-    # Install prerequisites
-    sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
     
     # Add Docker's official GPG key
     curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
     
     # Add Docker repository
-    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
     
     # Install Docker
     sudo apt update
@@ -255,17 +220,117 @@ install_docker_official() {
     fi
     
     if check_docker_installed; then
-        print_status "✓ Docker installed successfully from official repository"
+        print_success "Docker installed from official repository"
         sudo systemctl start docker
         sudo systemctl enable docker
         sudo usermod -aG docker $USER
+        return 0
     else
-        print_error "✗ Docker installation failed"
+        print_fail "Docker installation failed"
         return 1
     fi
 }
 
-# Function to create ChirpStack directory and docker-compose.yml
+# Function to create ChirpStack configuration files
+create_config_files() {
+    print_status "Creating ChirpStack configuration files..."
+    
+    # Create configuration directories
+    mkdir -p "$CONFIG_DIR/chirpstack-application-server"
+    mkdir -p "$CONFIG_DIR/chirpstack-network-server"
+    mkdir -p "$CONFIG_DIR/chirpstack-gateway-bridge"
+    mkdir -p "$CONFIG_DIR/postgresql/initdb"
+    
+    # Create application server configuration
+    cat > "$CONFIG_DIR/chirpstack-application-server/chirpstack-application-server.toml" << 'EOF'
+[postgresql]
+dsn="postgres://chirpstack_as:chirpstack_as@postgresql/chirpstack_as?sslmode=disable"
+
+[redis]
+url="redis://redis:6379"
+
+[application_server]
+  [application_server.external_api]
+  bind="0.0.0.0:8080"
+  tls_cert=""
+  tls_key=""
+
+  [application_server.api]
+  bind="0.0.0.0:8001"
+
+[join_server]
+default="http://chirpstack-application-server:8003"
+EOF
+
+    # Create network server configuration
+    cat > "$CONFIG_DIR/chirpstack-network-server/chirpstack-network-server.toml" << 'EOF'
+[postgresql]
+dsn="postgres://chirpstack_ns:chirpstack_ns@postgresql/chirpstack_ns?sslmode=disable"
+
+[redis]
+url="redis://redis:6379"
+
+[network_server]
+net_id="000000"
+
+  [network_server.band]
+  name="EU868"
+
+  [network_server.api]
+  bind="0.0.0.0:8000"
+
+  [network_server.gateway]
+    [network_server.gateway.backend]
+      [network_server.gateway.backend.mqtt]
+      server="tcp://mosquitto:1883"
+EOF
+
+    # Create gateway bridge configuration
+    cat > "$CONFIG_DIR/chirpstack-gateway-bridge/chirpstack-gateway-bridge.toml" << 'EOF'
+[backend]
+type="semtech_udp"
+
+  [backend.semtech_udp]
+  udp_bind="0.0.0.0:1700"
+
+[integration]
+marshaler="protobuf"
+
+  [integration.mqtt]
+  auth_type="generic"
+  server="tcp://mosquitto:1883"
+  username=""
+  password=""
+EOF
+
+    # Create PostgreSQL initialization script
+    cat > "$CONFIG_DIR/postgresql/initdb/001-init-chirpstack_ns.sh" << 'EOF'
+#!/bin/bash
+set -e
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    create role chirpstack_ns with login password 'chirpstack_ns';
+    create database chirpstack_ns with owner chirpstack_ns;
+EOSQL
+EOF
+
+    cat > "$CONFIG_DIR/postgresql/initdb/002-init-chirpstack_as.sh" << 'EOF'
+#!/bin/bash
+set -e
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    create role chirpstack_as with login password 'chirpstack_as';
+    create database chirpstack_as with owner chirpstack_as;
+EOSQL
+EOF
+
+    # Make init scripts executable
+    chmod +x "$CONFIG_DIR/postgresql/initdb/"*.sh
+    
+    print_success "Configuration files created"
+}
+
+# Function to create ChirpStack docker-compose.yml
 create_chirpstack() {
     print_header "Creating ChirpStack Configuration"
     
@@ -279,18 +344,63 @@ create_chirpstack() {
     mkdir -p "$CHIRPSTACK_DIR"
     cd "$CHIRPSTACK_DIR"
     
+    # Create configuration files
+    create_config_files
+    
     print_status "Creating docker-compose.yml file..."
     
     cat > "$DOCKER_COMPOSE_FILE" << 'EOF'
-version: "3"
+version: "3.8"
 
 services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - mosquittodata:/mosquitto/data
+      - mosquittologs:/mosquitto/log
+
+  postgresql:
+    image: postgres:14-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=root
+      - POSTGRES_USER=root
+      - POSTGRES_DB=chirpstack
+    volumes:
+      - postgresqldata:/var/lib/postgresql/data
+      - ./configuration/postgresql/initdb:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d chirpstack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   chirpstack-network-server:
     image: chirpstack/chirpstack-network-server:3
     restart: unless-stopped
     depends_on:
-      - postgresql
-      - redis
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    volumes:
+      - ./configuration/chirpstack-network-server:/etc/chirpstack-network-server
     environment:
       - NET_ID=000000
       - BAND=EU868
@@ -299,43 +409,51 @@ services:
     image: chirpstack/chirpstack-application-server:3
     restart: unless-stopped
     ports:
-      - 8080:8080
+      - "8080:8080"
     depends_on:
-      - chirpstack-network-server
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chirpstack-network-server:
+        condition: service_started
+    volumes:
+      - ./configuration/chirpstack-application-server:/etc/chirpstack-application-server
     environment:
       - POSTGRESQL_DSN=postgres://chirpstack_as:chirpstack_as@postgresql/chirpstack_as?sslmode=disable
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   chirpstack-gateway-bridge:
     image: chirpstack/chirpstack-gateway-bridge:3
     restart: unless-stopped
     ports:
-      - 1700:1700/udp
+      - "1700:1700/udp"
     depends_on:
+      - mosquitto
       - redis
-
-  postgresql:
-    image: postgres:12-alpine
-    restart: unless-stopped
-    environment:
-      - POSTGRES_PASSWORD=root
-      - POSTGRES_USER=root
-      - POSTGRES_DB=chirpstack_as
     volumes:
-      - postgresqldata:/var/lib/postgresql/data
-
-  redis:
-    image: redis:6-alpine
-    restart: unless-stopped
-    volumes:
-      - redisdata:/data
+      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge
 
 volumes:
   postgresqldata:
   redisdata:
+  mosquittodata:
+  mosquittologs:
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
 EOF
 
-    print_status "✓ ChirpStack configuration created in $CHIRPSTACK_DIR"
-    print_status "All services will auto-restart unless manually stopped"
+    print_success "ChirpStack configuration created in $CHIRPSTACK_DIR"
+    print_status "Services configured with health checks and proper networking"
 }
 
 # Function to start ChirpStack
@@ -356,27 +474,38 @@ start_chirpstack() {
     cd "$CHIRPSTACK_DIR"
     print_status "Starting ChirpStack services..."
     
-    # Test Docker daemon before proceeding
-    if ! test_docker_daemon; then
-        print_error "Cannot connect to Docker daemon"
-        print_error "Try running: newgrp docker"
-        return 1
-    fi
+    # Pull latest images
+    print_status "Pulling Docker images..."
+    docker-compose pull
     
+    # Start services
     docker-compose up -d
     
     if [ $? -eq 0 ]; then
-        print_status "Waiting for services to start..."
-        sleep 15
+        print_status "Services starting up..."
         
-        print_status "✓ ChirpStack started successfully!"
-        print_status "Web interface: http://localhost:8080"
-        print_status "Default login: admin / admin"
+        # Wait for PostgreSQL
+        wait_for_service "PostgreSQL" 5432
+        
+        # Wait for Redis
+        wait_for_service "Redis" 6379
+        
+        # Wait for web interface
+        wait_for_service "ChirpStack Web Interface" 8080
+        
+        print_success "ChirpStack started successfully!"
+        echo ""
+        print_status "Access Information:"
+        echo "  📱 Web Interface: http://localhost:8080"
+        echo "  👤 Default Login: admin / admin"
+        echo "  🌐 Gateway UDP Port: 1700"
+        echo "  📊 MQTT Broker: localhost:1883"
+        echo ""
         print_status "Services will auto-restart on system reboot"
     else
-        print_error "✗ Failed to start ChirpStack"
-        print_status "Checking logs..."
-        docker-compose logs --tail=10
+        print_fail "Failed to start ChirpStack"
+        print_status "Checking logs for errors..."
+        docker-compose logs --tail=20
         return 1
     fi
 }
@@ -395,9 +524,9 @@ stop_chirpstack() {
     docker-compose down
     
     if [ $? -eq 0 ]; then
-        print_status "✓ ChirpStack stopped successfully!"
+        print_success "ChirpStack stopped successfully!"
     else
-        print_error "✗ Error stopping ChirpStack"
+        print_fail "Error stopping ChirpStack"
         return 1
     fi
 }
@@ -409,24 +538,25 @@ status_chirpstack() {
     # Check Docker first
     echo -e "${BLUE}Docker Status:${NC}"
     if check_docker_installed; then
-        echo -e "  ✓ Docker installed: $(docker --version)"
+        echo -e "  ✓ Docker: $(docker --version | cut -d' ' -f3 | cut -d',' -f1)"
+        echo -e "  ✓ Docker Compose: $(docker-compose --version | cut -d' ' -f4 | cut -d',' -f1)"
     else
-        echo -e "  ✗ Docker not installed"
+        echo -e "  ✗ Docker: Not installed"
         return 1
     fi
     
     if check_docker_running; then
-        echo -e "  ✓ Docker service: Running"
+        echo -e "  ✓ Docker Service: Running"
     else
-        echo -e "  ✗ Docker service: Stopped"
-        print_warning "Run './chirpstack.sh start' to fix Docker issues"
+        echo -e "  ✗ Docker Service: Stopped"
+        print_warning "Run '$0 start' to fix Docker issues"
         return 1
     fi
     
     if test_docker_daemon; then
-        echo -e "  ✓ Docker daemon: Accessible"
+        echo -e "  ✓ Docker Daemon: Accessible"
     else
-        echo -e "  ✗ Docker daemon: Cannot connect"
+        echo -e "  ✗ Docker Daemon: Cannot connect"
         print_warning "You may need to run: newgrp docker"
         return 1
     fi
@@ -435,19 +565,43 @@ status_chirpstack() {
     echo -e "${BLUE}ChirpStack Status:${NC}"
     
     if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
-        echo -e "  ✗ ChirpStack not created yet"
-        print_warning "Run './chirpstack.sh create' first"
+        echo -e "  ✗ ChirpStack: Not created"
+        print_warning "Run '$0 create' first"
         return 1
     fi
     
     cd "$CHIRPSTACK_DIR" 2>/dev/null || return 1
+    
+    # Show container status
+    echo ""
     docker-compose ps
     
     echo ""
-    print_status "Service URLs:"
-    echo "  Web Interface: http://localhost:8080"
-    echo "  Gateway Bridge: UDP port 1700"
-    echo "  Default Login: admin / admin"
+    echo -e "${BLUE}Service Health:${NC}"
+    
+    # Check each service
+    if curl -s http://localhost:8080 > /dev/null 2>&1; then
+        echo -e "  ✓ Web Interface: http://localhost:8080 - ${GREEN}Healthy${NC}"
+    else
+        echo -e "  ✗ Web Interface: http://localhost:8080 - ${RED}Not responding${NC}"
+    fi
+    
+    if nc -z localhost 1700 2>/dev/null; then
+        echo -e "  ✓ Gateway Bridge: UDP 1700 - ${GREEN}Listening${NC}"
+    else
+        echo -e "  ✗ Gateway Bridge: UDP 1700 - ${RED}Not listening${NC}"
+    fi
+    
+    if nc -z localhost 1883 2>/dev/null; then
+        echo -e "  ✓ MQTT Broker: TCP 1883 - ${GREEN}Listening${NC}"
+    else
+        echo -e "  ✗ MQTT Broker: TCP 1883 - ${RED}Not listening${NC}"
+    fi
+    
+    echo ""
+    print_status "Quick Access:"
+    echo "  🌐 Web Interface: http://localhost:8080"
+    echo "  👤 Login: admin / admin"
 }
 
 # Function to view logs
@@ -464,8 +618,15 @@ view_logs() {
     fi
     
     cd "$CHIRPSTACK_DIR"
-    print_status "Showing recent logs (Press Ctrl+C to exit)..."
-    docker-compose logs -f
+    
+    # Show recent logs for all services
+    if [ "$2" = "follow" ] || [ "$2" = "-f" ]; then
+        print_status "Following logs (Press Ctrl+C to exit)..."
+        docker-compose logs -f
+    else
+        print_status "Recent logs (last 50 lines per service):"
+        docker-compose logs --tail=50
+    fi
 }
 
 # Enhanced web interface function
@@ -488,57 +649,87 @@ open_web() {
         fi
     fi
     
-    # Wait a moment for web server to be ready
-    print_status "Waiting for web server to be ready..."
-    sleep 5
-    
     # Test if web server is responding
-    if curl -s http://localhost:8080 > /dev/null; then
-        print_status "✓ Web server is responding"
-    else
-        print_warning "Web server may still be starting up..."
+    print_status "Testing web server connectivity..."
+    local attempts=0
+    local max_attempts=10
+    
+    while [ $attempts -lt $max_attempts ]; do
+        if curl -s http://localhost:8080 > /dev/null 2>&1; then
+            print_success "Web server is responding"
+            break
+        fi
+        print_status "Waiting for web server... ($((attempts + 1))/$max_attempts)"
+        sleep 3
+        attempts=$((attempts + 1))
+    done
+    
+    if [ $attempts -eq $max_attempts ]; then
+        print_error "Web server is not responding"
+        print_status "Check logs with: $0 logs"
+        return 1
     fi
     
-    print_status "Opening http://localhost:8080 in your browser..."
+    print_status "Opening http://localhost:8080 in browser..."
     
-    # Try different browser commands
-    if command -v firefox &> /dev/null; then
-        firefox http://localhost:8080 &
-        print_status "✓ Opened in Firefox"
-    elif command -v firefox-esr &> /dev/null; then
-        firefox-esr http://localhost:8080 &
-        print_status "✓ Opened in Firefox ESR"
-    elif command -v xdg-open &> /dev/null; then
-        xdg-open http://localhost:8080
-        print_status "✓ Opened with default browser"
-    elif command -v chromium &> /dev/null; then
-        chromium http://localhost:8080 &
-        print_status "✓ Opened in Chromium"
-    elif command -v google-chrome &> /dev/null; then
-        google-chrome http://localhost:8080 &
-        print_status "✓ Opened in Google Chrome"
-    else
-        print_warning "No browser found. Please install Firefox:"
-        print_status "Run: ./chirpstack.sh install-browser"
+    # Try different browsers
+    local browser_opened=false
+    
+    for browser in firefox firefox-esr chromium google-chrome; do
+        if command -v "$browser" &> /dev/null; then
+            $browser http://localhost:8080 >/dev/null 2>&1 &
+            print_success "Opened in $browser"
+            browser_opened=true
+            break
+        fi
+    done
+    
+    if ! $browser_opened; then
+        if command -v xdg-open &> /dev/null; then
+            xdg-open http://localhost:8080 >/dev/null 2>&1 &
+            print_success "Opened with default browser"
+            browser_opened=true
+        fi
+    fi
+    
+    if ! $browser_opened; then
+        print_warning "No browser found. Install Firefox:"
+        print_status "sudo apt install firefox-esr"
         print_warning "Or manually open: http://localhost:8080"
     fi
     
     echo ""
-    print_status "ChirpStack Login Credentials:"
-    echo "  Username: admin"
-    echo "  Password: admin"
+    echo -e "${CYAN}ChirpStack Login Information:${NC}"
+    echo "  🌐 URL: http://localhost:8080"
+    echo "  👤 Username: admin"
+    echo "  🔑 Password: admin"
+    echo ""
+    echo -e "${CYAN}First-time setup:${NC}"
+    echo "  1. Login with admin/admin"
+    echo "  2. Go to 'Network Servers' and add: localhost:8000"
+    echo "  3. Create an application"
+    echo "  4. Add devices to your application"
 }
 
 # Function to get system IP
 get_ip() {
-    print_header "System IP Address"
+    print_header "Network Information"
     
-    echo "Local IP addresses for RAK gateway configuration:"
-    ip addr show | grep 'inet ' | grep -v '127.0.0.1' | awk '{print "  " $2}' | cut -d'/' -f1
+    echo -e "${BLUE}Local IP Addresses:${NC}"
+    ip addr show | grep 'inet ' | grep -v '127.0.0.1' | awk '{print "  📍 " $2}' | cut -d'/' -f1
     
-    echo
-    print_status "Use one of these IP addresses in your RAK gateway configuration"
-    print_status "Set server_address to one of the above IPs in your gateway config"
+    echo ""
+    echo -e "${BLUE}ChirpStack Service Ports:${NC}"
+    echo "  🌐 Web Interface: 8080"
+    echo "  📡 LoRaWAN Gateway: 1700 (UDP)"
+    echo "  📊 MQTT Broker: 1883"
+    echo "  🔗 Network Server API: 8000"
+    echo "  📱 Application Server API: 8001"
+    
+    echo ""
+    echo -e "${CYAN}Gateway Configuration:${NC}"
+    echo "Use one of the IP addresses above as your gateway's server address"
+    echo "Set gateway to forward packets to: <IP>:1700"
 }
 
 # Function to restart ChirpStack
@@ -549,129 +740,156 @@ restart_chirpstack() {
     start_chirpstack
 }
 
+# Function to clean up and reset
+cleanup_chirpstack() {
+    print_header "Cleaning Up ChirpStack"
+    
+    if [ -f "$DOCKER_COMPOSE_FILE" ]; then
+        cd "$CHIRPSTACK_DIR"
+        print_status "Stopping and removing containers..."
+        docker-compose down -v --remove-orphans
+        
+        print_status "Removing unused Docker images..."
+        docker image prune -f
+        
+        print_status "Removing unused Docker volumes..."
+        docker volume prune -f
+    fi
+    
+    print_success "Cleanup completed"
+}
+
 # Function to uninstall ChirpStack
 uninstall_chirpstack() {
     print_header "Uninstalling ChirpStack"
     
-    read -p "Are you sure you want to remove ChirpStack and all data? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "${RED}WARNING: This will remove all ChirpStack data and configurations!${NC}"
+    read -p "Are you sure you want to continue? (type 'yes' to confirm): " -r
+    
+    if [[ $REPLY == "yes" ]]; then
         if [ -d "$CHIRPSTACK_DIR" ]; then
             cd "$CHIRPSTACK_DIR"
-            print_status "Stopping and removing containers..."
-            docker-compose down -v 2>/dev/null || true
-            cd ..
+            print_status "Stopping and removing all containers and data..."
+            docker-compose down -v --remove-orphans
+            
+            print_status "Removing ChirpStack images..."
+            docker rmi $(docker images | grep chirpstack | awk '{print $3}') 2>/dev/null || true
+            
+            cd "$HOME"
             print_status "Removing ChirpStack directory..."
             rm -rf "$CHIRPSTACK_DIR"
         fi
-        print_status "✓ ChirpStack uninstalled successfully!"
+        
+        print_success "ChirpStack uninstalled successfully!"
     else
         print_status "Uninstall cancelled."
     fi
 }
 
-# Function to install browser only
-install_browser() {
-    check_and_install_firefox
-}
-
-# Function to stop Docker service
-stop_docker() {
-    print_header "Stopping Docker Service"
+# Function to update ChirpStack
+update_chirpstack() {
+    print_header "Updating ChirpStack"
     
-    # First stop ChirpStack if running
-    if [ -f "$DOCKER_COMPOSE_FILE" ]; then
-        print_status "Stopping ChirpStack services first..."
-        cd "$CHIRPSTACK_DIR"
-        docker-compose down 2>/dev/null || true
+    if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
+        print_error "ChirpStack not found. Please create it first."
+        return 1
     fi
     
-    # Stop all running containers
-    print_status "Stopping all Docker containers..."
-    docker stop $(docker ps -q) 2>/dev/null || true
+    cd "$CHIRPSTACK_DIR"
     
-    # Stop Docker service
-    print_status "Stopping Docker service..."
-    sudo systemctl stop docker
+    print_status "Pulling latest Docker images..."
+    docker-compose pull
     
-    if ! check_docker_running; then
-        print_status "✓ Docker service stopped successfully"
-        print_warning "Note: ChirpStack and all containers are now stopped"
-        print_status "To start again: ./chirpstack.sh start"
+    print_status "Restarting services with new images..."
+    docker-compose up -d
+    
+    print_success "ChirpStack updated successfully!"
+    
+    # Check if services are healthy
+    sleep 10
+    if curl -s http://localhost:8080 > /dev/null 2>&1; then
+        print_success "Update completed successfully!"
     else
-        print_error "✗ Failed to stop Docker service"
-        return 1
+        print_warning "Services may still be starting up..."
+        print_status "Check status with: $0 status"
     fi
 }
 
-# Function to start Docker service only
-start_docker() {
-    print_header "Starting Docker Service"
+# Function to backup ChirpStack data
+backup_chirpstack() {
+    print_header "Backing Up ChirpStack Data"
     
-    if check_docker_running; then
-        print_status "✓ Docker service is already running"
-        return 0
-    fi
-    
-    print_status "Starting Docker service..."
-    sudo systemctl start docker
-    
-    if check_docker_running; then
-        print_status "✓ Docker service started successfully"
-        print_status "ChirpStack containers will auto-start if configured"
-    else
-        print_error "✗ Failed to start Docker service"
+    if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
+        print_error "ChirpStack not found."
         return 1
     fi
+    
+    local backup_dir="$HOME/chirpstack-backup-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$backup_dir"
+    
+    cd "$CHIRPSTACK_DIR"
+    
+    print_status "Creating database backup..."
+    docker-compose exec -T postgresql pg_dumpall -U root > "$backup_dir/database.sql"
+    
+    print_status "Backing up configuration files..."
+    cp -r configuration "$backup_dir/"
+    cp docker-compose.yml "$backup_dir/"
+    
+    print_success "Backup created at: $backup_dir"
 }
 
 # Function to show help
 show_help() {
     print_header "ChirpStack Manager Help"
-    echo "Usage: $0 [COMMAND]"
+    echo -e "${CYAN}Usage:${NC} $0 [COMMAND]"
     echo ""
-    echo "Commands:"
-    echo "  install         - Install Docker and Firefox (if needed)"
-    echo "  create          - Create ChirpStack configuration"
-    echo "  start           - Start ChirpStack services"
-    echo "  stop            - Stop ChirpStack services"
-    echo "  restart         - Restart ChirpStack services"
-    echo "  status          - Show detailed system status"
-    echo "  logs            - View ChirpStack logs"
-    echo "  web             - Open web interface in browser"
-    echo "  ip              - Show system IP addresses"
-    echo "  install-browser - Install Firefox browser only"
-    echo "  start-docker    - Start Docker service only"
-    echo "  stop-docker     - Stop Docker service (stops all containers)"
-    echo "  uninstall       - Remove ChirpStack completely"
-    echo "  help            - Show this help message"
+    echo -e "${BLUE}Setup Commands:${NC}"
+    echo "  install         Install Docker and dependencies"
+    echo "  create          Create ChirpStack configuration"
+    echo "  start           Start ChirpStack services"
     echo ""
-    echo "Quick start (first time):"
-    echo "  1. $0 install    (installs Docker and Firefox)"
-    echo "  2. $0 create     (creates ChirpStack config)"
-    echo "  3. $0 start      (starts all services)"
-    echo "  4. $0 web        (opens web interface)"
+    echo -e "${BLUE}Management Commands:${NC}"
+    echo "  stop            Stop ChirpStack services"
+    echo "  restart         Restart ChirpStack services"
+    echo "  status          Show detailed system status"
+    echo "  logs [follow]   View ChirpStack logs (-f for follow mode)"
+    echo "  web             Open web interface in browser"
     echo ""
-    echo "Daily use:"
-    echo "  $0 web           (services auto-start if needed)"
+    echo -e "${BLUE}Maintenance Commands:${NC}"
+    echo "  update          Update ChirpStack to latest version"
+    echo "  cleanup         Clean up unused Docker resources"
+    echo "  backup          Backup ChirpStack data"
+    echo "  uninstall       Remove ChirpStack completely"
     echo ""
-    echo "Docker management:"
-    echo "  $0 start-docker  (start Docker service only)"
-    echo "  $0 stop-docker   (stop Docker service and all containers)"
+    echo -e "${BLUE}Information Commands:${NC}"
+    echo "  ip              Show network information"
+    echo "  help            Show this help message"
     echo ""
-    echo "Features:"
-    echo "  • Automatic Docker service management"
-    echo "  • Auto-restart services on reboot"
-    echo "  • Browser installation if needed"
+    echo -e "${CYAN}Quick Start (first time):${NC}"
+    echo "  1. $0 install    # Install Docker"
+    echo "  2. $0 create     # Create configuration"
+    echo "  3. $0 start      # Start services"
+    echo "  4. $0 web        # Open web interface"
+    echo ""
+    echo -e "${CYAN}Daily Usage:${NC}"
+    echo "  $0 web           # Open web interface (auto-starts if needed)"
+    echo "  $0 status        # Check system health"
+    echo "  $0 logs          # View recent logs"
+    echo ""
+    echo -e "${BLUE}Features:${NC}"
+    echo "  • Automatic Docker installation and configuration"
+    echo "  • Health checks and service monitoring" 
     echo "  • Comprehensive error handling"
-    echo "  • Smart dependency checking"
+    echo "  • Complete LoRaWAN stack with MQTT broker"
+    echo "  • Auto-restart services on reboot"
+    echo "  • Easy backup and update procedures"
 }
 
 # Main script logic
 case "$1" in
     install)
         manage_docker
-        check_and_install_firefox
         ;;
     create)
         create_chirpstack
@@ -689,7 +907,7 @@ case "$1" in
         status_chirpstack
         ;;
     logs)
-        view_logs
+        view_logs "$@"
         ;;
     web)
         open_web
@@ -697,14 +915,14 @@ case "$1" in
     ip)
         get_ip
         ;;
-    install-browser)
-        install_browser
+    update)
+        update_chirpstack
         ;;
-    start-docker)
-        start_docker
+    cleanup)
+        cleanup_chirpstack
         ;;
-    stop-docker)
-        stop_docker
+    backup)
+        backup_chirpstack
         ;;
     uninstall)
         uninstall_chirpstack
