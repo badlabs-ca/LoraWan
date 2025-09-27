@@ -1,0 +1,105 @@
+# ChirpStack Manager for Debian - Simple Instructions
+
+## Step 1: Download and Setup the Script
+
+```bash
+# Download the script (copy the script content to a file)
+nano chirpstack.sh
+
+# Make it executable
+chmod +x chirpstack.sh
+```
+
+## Step 2: Quick Start (First Time)
+
+```bash
+# 1. Install Docker (only needed once)
+./chirpstack.sh install
+
+# 2. Create ChirpStack configuration
+./chirpstack.sh create
+
+# 3. Start ChirpStack
+./chirpstack.sh start
+
+# 4. Open web interface
+./chirpstack.sh web
+```
+
+## Daily Commands
+
+### Start ChirpStack
+```bash
+./chirpstack.sh start
+```
+
+### Stop ChirpStack
+```bash
+./chirpstack.sh stop
+```
+
+### Open Web Interface (http://localhost:8080)
+```bash
+./chirpstack.sh web
+```
+
+### Check if Running
+```bash
+./chirpstack.sh status
+```
+
+### View Logs (for troubleshooting)
+```bash
+./chirpstack.sh logs
+```
+
+### Get Your PC's IP Address (for RAK gateway config)
+```bash
+./chirpstack.sh ip
+```
+
+### Restart ChirpStack
+```bash
+./chirpstack.sh restart
+```
+
+## All Available Commands
+
+| Command | What it does |
+|---------|-------------|
+| `./chirpstack.sh install` | Install Docker on Debian |
+| `./chirpstack.sh create` | Create ChirpStack configuration |
+| `./chirpstack.sh start` | Start ChirpStack services |
+| `./chirpstack.sh stop` | Stop ChirpStack services |
+| `./chirpstack.sh restart` | Restart ChirpStack |
+| `./chirpstack.sh status` | Show if ChirpStack is running |
+| `./chirpstack.sh logs` | View ChirpStack logs |
+| `./chirpstack.sh web` | Open web interface in browser |
+| `./chirpstack.sh ip` | Show your PC's IP addresses |
+| `./chirpstack.sh uninstall` | Remove ChirpStack completely |
+| `./chirpstack.sh help` | Show all commands |
+
+## Default Login for Web Interface
+
+- **URL**: http://localhost:8080
+- **Username**: admin
+- **Password**: admin
+
+## Configure Your RAK Gateway
+
+1. Get your PC's IP: `./chirpstack.sh ip`
+2. In your RAK gateway configuration, set:
+   - Server address: `YOUR_PC_IP` (from step 1)
+   - Port: `1700`
+
+## Troubleshooting
+
+If something doesn't work:
+1. Check status: `./chirpstack.sh status`
+2. View logs: `./chirpstack.sh logs`
+3. Restart: `./chirpstack.sh restart`
+
+## File Locations
+
+- Script creates ChirpStack in: `~/chirpstack/`
+- All data is stored in Docker volumes (persistent)
