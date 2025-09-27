@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# ChirpStack Manager Script for Debian (Complete Fixed Version)
-# This script handles all Docker issues, creates proper configurations, and manages ChirpStack
+# ChirpStack Manager Script for Debian VM (Optimized Version)
+# This script handles Docker installation, creates optimized configurations, and manages ChirpStack
+# Optimized for VM environments with resource constraints and improved error handling
 
 CHIRPSTACK_DIR="$HOME/chirpstack"
 DOCKER_COMPOSE_FILE="$CHIRPSTACK_DIR/docker-compose.yml"
@@ -44,10 +45,28 @@ print_fail() {
 
 # Function to check if Docker is installed
 check_docker_installed() {
-    if command -v docker &> /dev/null && command -v docker-compose &> /dev/null; then
+    if command -v docker &> /dev/null && (command -v docker-compose &> /dev/null || docker compose version &> /dev/null 2>&1); then
         return 0
     fi
     return 1
+}
+
+# Function to check system requirements
+check_system_requirements() {
+    local total_mem=$(free -m | awk 'NR==2{printf "%.0f", $2}')
+    local available_space=$(df / | awk 'NR==2 {printf "%.0f", $4/1024}')
+
+    print_status "Checking system requirements..."
+    echo "  Memory: ${total_mem}MB (Recommended: 4096MB+)"
+    echo "  Disk Space: ${available_space}MB available"
+
+    if [ "$total_mem" -lt 2048 ]; then
+        print_warning "Low memory detected. ChirpStack may run slowly."
+    fi
+
+    if [ "$available_space" -lt 5120 ]; then
+        print_warning "Low disk space. Need at least 5GB for Docker images."
+    fi
 }
 
 # Function to check if Docker service is running
@@ -78,31 +97,90 @@ test_docker_daemon() {
 wait_for_service() {
     local service_name="$1"
     local port="$2"
-    local max_attempts=30
+    local max_attempts=60
     local attempt=1
-    
+
     print_status "Waiting for $service_name to be ready on port $port..."
-    
+
     while [ $attempt -le $max_attempts ]; do
         if nc -z localhost $port 2>/dev/null; then
             print_success "$service_name is ready!"
             return 0
         fi
-        
-        echo -n "."
-        sleep 2
+
+        if [ $((attempt % 10)) -eq 0 ]; then
+            echo ""
+            print_status "Still waiting for $service_name... ($attempt/$max_attempts)"
+        else
+            echo -n "."
+        fi
+        sleep 3
         attempt=$((attempt + 1))
     done
-    
+
     echo ""
     print_error "$service_name failed to start within expected time"
     return 1
 }
 
+# Function to check Docker Compose version and use appropriate command
+get_docker_compose_cmd() {
+    if command -v docker-compose &> /dev/null; then
+        echo "docker-compose"
+    elif docker compose version &> /dev/null 2>&1; then
+        echo "docker compose"
+    else
+        print_error "Neither docker-compose nor docker compose is available"
+        return 1
+    fi
+}
+
+# Function to optimize system for Docker
+optimize_system() {
+    print_status "Optimizing system for ChirpStack..."
+
+    # Increase vm.max_map_count for better performance
+    if [ "$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)" -lt 262144 ]; then
+        print_status "Increasing vm.max_map_count..."
+        echo 'vm.max_map_count=262144' | sudo tee -a /etc/sysctl.conf > /dev/null
+        sudo sysctl -p > /dev/null 2>&1
+    fi
+
+    # Configure Docker daemon for better performance in VM
+    local docker_config="/etc/docker/daemon.json"
+    if [ ! -f "$docker_config" ]; then
+        print_status "Optimizing Docker configuration..."
+        sudo mkdir -p /etc/docker
+        sudo tee "$docker_config" > /dev/null <<EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "storage-driver": "overlay2",
+  "default-ulimits": {
+    "nofile": {
+      "Hard": 64000,
+      "Name": "nofile",
+      "Soft": 64000
+    }
+  }
+}
+EOF
+        sudo systemctl restart docker
+        sleep 5
+    fi
+}
+
 # Enhanced Docker management function
 manage_docker() {
     print_header "Docker System Management"
-    
+
+    # Check system requirements
+    check_system_requirements
+    echo ""
+
     # Check if Docker is installed
     if ! check_docker_installed; then
         print_warning "Docker is not installed. Installing now..."
@@ -166,18 +244,29 @@ manage_docker() {
     return 0
 }
 
+# Function to install dependencies
+install_dependencies() {
+    print_status "Installing required dependencies..."
+    sudo apt update -qq
+    sudo apt install -y curl netcat-openbsd jq htop iotop > /dev/null 2>&1
+    print_success "Dependencies installed"
+}
+
 # Function to install Docker on Debian
 install_docker() {
     print_header "Installing Docker on Debian"
-    
+
+    # Install dependencies first
+    install_dependencies
+
     print_status "Updating package list..."
-    sudo apt update
+    sudo apt update -qq
     
     print_status "Installing prerequisites..."
-    sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release software-properties-common
-    
+    sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release software-properties-common > /dev/null 2>&1
+
     print_status "Installing Docker and Docker Compose..."
-    sudo apt install -y docker.io docker-compose
+    sudo apt install -y docker.io docker-compose > /dev/null 2>&1
     
     if check_docker_installed; then
         print_success "Docker installed successfully"
@@ -361,6 +450,12 @@ services:
     volumes:
       - mosquittodata:/mosquitto/data
       - mosquittologs:/mosquitto/log
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
   postgresql:
     image: postgres:14-alpine
@@ -369,25 +464,51 @@ services:
       - POSTGRES_PASSWORD=root
       - POSTGRES_USER=root
       - POSTGRES_DB=chirpstack
+      - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements
+      - POSTGRES_MAX_CONNECTIONS=50
     volumes:
       - postgresqldata:/var/lib/postgresql/data
       - ./configuration/postgresql/initdb:/docker-entrypoint-initdb.d
+    command: >
+      postgres -c shared_preload_libraries=pg_stat_statements
+               -c max_connections=50
+               -c shared_buffers=256MB
+               -c effective_cache_size=512MB
+               -c maintenance_work_mem=64MB
+               -c checkpoint_completion_target=0.9
+               -c wal_buffers=16MB
+               -c default_statistics_target=100
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U root -d chirpstack"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
       - redisdata:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 15s
       timeout: 3s
       retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
   chirpstack-network-server:
     image: chirpstack/chirpstack-network-server:3
@@ -404,6 +525,18 @@ services:
     environment:
       - NET_ID=000000
       - BAND=EU868
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
   chirpstack-application-server:
     image: chirpstack/chirpstack-application-server:3
@@ -422,10 +555,17 @@ services:
     environment:
       - POSTGRESQL_DSN=postgres://chirpstack_as:chirpstack_as@postgresql/chirpstack_as?sslmode=disable
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/internal/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
   chirpstack-gateway-bridge:
     image: chirpstack/chirpstack-gateway-bridge:3
@@ -433,10 +573,18 @@ services:
     ports:
       - "1700:1700/udp"
     depends_on:
-      - mosquitto
-      - redis
+      mosquitto:
+        condition: service_started
+      redis:
+        condition: service_started
     volumes:
       - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
 volumes:
   postgresqldata:
@@ -459,38 +607,55 @@ EOF
 # Function to start ChirpStack
 start_chirpstack() {
     print_header "Starting ChirpStack"
-    
+
     # Ensure Docker is working
     if ! manage_docker; then
         print_error "Cannot start ChirpStack - Docker issues detected"
         return 1
     fi
-    
+
     if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
         print_error "ChirpStack not created yet. Please run 'create' first."
         return 1
     fi
-    
+
+    # Optimize system
+    optimize_system
+
     cd "$CHIRPSTACK_DIR"
+    local compose_cmd=$(get_docker_compose_cmd)
+
     print_status "Starting ChirpStack services..."
-    
+
     # Pull latest images
     print_status "Pulling Docker images..."
-    docker-compose pull
-    
-    # Start services
-    docker-compose up -d
+    $compose_cmd pull --quiet
+
+    # Start services with explicit order for better reliability
+    print_status "Starting infrastructure services..."
+    $compose_cmd up -d postgresql redis mosquitto
+
+    # Wait for infrastructure to be ready
+    sleep 10
+
+    print_status "Starting ChirpStack services..."
+    $compose_cmd up -d
     
     if [ $? -eq 0 ]; then
         print_status "Services starting up..."
         
         # Wait for PostgreSQL
         wait_for_service "PostgreSQL" 5432
-        
+
         # Wait for Redis
         wait_for_service "Redis" 6379
-        
-        # Wait for web interface
+
+        # Wait for MQTT
+        wait_for_service "MQTT Broker" 1883
+
+        # Wait for web interface with extended timeout
+        print_status "Waiting for ChirpStack to fully initialize..."
+        sleep 15
         wait_for_service "ChirpStack Web Interface" 8080
         
         print_success "ChirpStack started successfully!"
@@ -505,7 +670,9 @@ start_chirpstack() {
     else
         print_fail "Failed to start ChirpStack"
         print_status "Checking logs for errors..."
-        docker-compose logs --tail=20
+        $compose_cmd logs --tail=20
+        print_status "Checking container status..."
+        $compose_cmd ps
         return 1
     fi
 }
@@ -675,7 +842,8 @@ open_web() {
     # Try different browsers
     local browser_opened=false
     
-    for browser in firefox firefox-esr chromium google-chrome; do
+    # Enhanced browser detection for VM environment
+    for browser in firefox firefox-esr chromium-browser chromium google-chrome-stable google-chrome; do
         if command -v "$browser" &> /dev/null; then
             $browser http://localhost:8080 >/dev/null 2>&1 &
             print_success "Opened in $browser"
@@ -839,6 +1007,44 @@ backup_chirpstack() {
     print_success "Backup created at: $backup_dir"
 }
 
+# Function to monitor performance
+monitor_performance() {
+    print_header "ChirpStack Performance Monitor"
+
+    if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
+        print_error "ChirpStack not found."
+        return 1
+    fi
+
+    cd "$CHIRPSTACK_DIR"
+    local compose_cmd=$(get_docker_compose_cmd)
+
+    print_status "System Resources:"
+    echo "  $(free -h | grep Mem)"
+    echo "  $(df -h / | tail -1)"
+    echo ""
+
+    print_status "Docker Container Stats:"
+    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"
+    echo ""
+
+    print_status "Service Health Status:"
+    for service in postgresql redis mosquitto chirpstack-network-server chirpstack-application-server chirpstack-gateway-bridge; do
+        local health=$($compose_cmd ps "$service" 2>/dev/null | grep -o "healthy\|unhealthy\|starting" || echo "unknown")
+        if [ "$health" = "healthy" ]; then
+            echo -e "  ✓ $service: ${GREEN}$health${NC}"
+        elif [ "$health" = "starting" ]; then
+            echo -e "  ⏳ $service: ${YELLOW}$health${NC}"
+        else
+            echo -e "  ✗ $service: ${RED}$health${NC}"
+        fi
+    done
+
+    echo ""
+    print_status "Network Ports:"
+    netstat -tlnp 2>/dev/null | grep -E ":(8080|1700|1883|5432|6379)" || true
+}
+
 # Function to show help
 show_help() {
     print_header "ChirpStack Manager Help"
@@ -864,6 +1070,7 @@ show_help() {
     echo ""
     echo -e "${BLUE}Information Commands:${NC}"
     echo "  ip              Show network information"
+    echo "  monitor         Show performance and health monitoring"
     echo "  help            Show this help message"
     echo ""
     echo -e "${CYAN}Quick Start (first time):${NC}"
@@ -879,11 +1086,13 @@ show_help() {
     echo ""
     echo -e "${BLUE}Features:${NC}"
     echo "  • Automatic Docker installation and configuration"
-    echo "  • Health checks and service monitoring" 
+    echo "  • VM-optimized resource management"
+    echo "  • Health checks and service monitoring"
     echo "  • Comprehensive error handling"
     echo "  • Complete LoRaWAN stack with MQTT broker"
     echo "  • Auto-restart services on reboot"
     echo "  • Easy backup and update procedures"
+    echo "  • Performance monitoring and optimization"
 }
 
 # Main script logic
@@ -926,6 +1135,9 @@ case "$1" in
         ;;
     uninstall)
         uninstall_chirpstack
+        ;;
+    monitor)
+        monitor_performance
         ;;
     help|--help|-h)
         show_help
