@@ -22,8 +22,10 @@ MQTT_HOST="localhost"
 MQTT_PORT="1883"
 GATEWAY_UDP_PORT="1700"
 
-# Gateway Configuration
-GATEWAY_REGION="EU868"  # Can be changed: EU868, US915, AS923, AU915, CN470, etc.
+# Gateway Configuration (defaults - will be overridden by region selection)
+GATEWAY_REGION="US915"  # Can be changed: EU868, US915, AS923, AU915, CN470, etc.
+CHIRPSTACK_REGION="us915_1"  # ChirpStack region identifier
+GATEWAY_CONFIG_FILE="global_conf.json.sx1250.US915.USB"  # Gateway config file
 GATEWAY_EUI=""          # Will be auto-detected
 
 # ChirpStack Default Credentials
@@ -140,6 +142,260 @@ check_system_requirements() {
     else
         print_success "All system requirements met!"
     fi
+}
+
+# Interactive region selection
+select_region() {
+    print_header "LoRaWAN Region Selection"
+
+    echo "Please select your LoRaWAN frequency region:"
+    echo ""
+    echo "1) 🇺🇸 US915     - United States, Canada, South America"
+    echo "2) 🇪🇺 EU868     - Europe, Africa, Middle East"
+    echo "3) 🇯🇵 AS923     - Asia Pacific (Japan, Singapore, etc.)"
+    echo "4) 🇦🇺 AU915     - Australia, New Zealand"
+    echo "5) 🇨🇳 CN470     - China"
+    echo "6) 🇰🇷 KR920     - South Korea"
+    echo "7) 🇮🇳 IN865     - India"
+    echo "8) 🇷🇺 RU864     - Russia"
+    echo ""
+    echo "Choose the region that matches your location for legal compliance"
+    echo "and optimal performance."
+    echo ""
+
+    while true; do
+        read -p "Enter your choice (1-8): " choice
+
+        case $choice in
+            1)
+                GATEWAY_REGION="US915"
+                CHIRPSTACK_REGION="us915_1"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.US915.USB"
+                print_success "Selected: US915 (United States)"
+                break
+                ;;
+            2)
+                GATEWAY_REGION="EU868"
+                CHIRPSTACK_REGION="eu868"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.EU868.USB"
+                print_success "Selected: EU868 (Europe)"
+                break
+                ;;
+            3)
+                GATEWAY_REGION="AS923"
+                CHIRPSTACK_REGION="as923_1"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.AS923.USB"
+                print_success "Selected: AS923 (Asia Pacific)"
+                break
+                ;;
+            4)
+                GATEWAY_REGION="AU915"
+                CHIRPSTACK_REGION="au915_1"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.AU915.USB"
+                print_success "Selected: AU915 (Australia)"
+                break
+                ;;
+            5)
+                GATEWAY_REGION="CN470"
+                CHIRPSTACK_REGION="cn470_1"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.CN470.USB"
+                print_success "Selected: CN470 (China)"
+                break
+                ;;
+            6)
+                GATEWAY_REGION="KR920"
+                CHIRPSTACK_REGION="kr920_1"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.KR920.USB"
+                print_success "Selected: KR920 (South Korea)"
+                break
+                ;;
+            7)
+                GATEWAY_REGION="IN865"
+                CHIRPSTACK_REGION="in865_1"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.IN865.USB"
+                print_success "Selected: IN865 (India)"
+                break
+                ;;
+            8)
+                GATEWAY_REGION="RU864"
+                CHIRPSTACK_REGION="ru864_1"
+                GATEWAY_CONFIG_FILE="global_conf.json.sx1250.RU864.USB"
+                print_success "Selected: RU864 (Russia)"
+                break
+                ;;
+            *)
+                print_error "Invalid choice. Please enter 1-8."
+                ;;
+        esac
+    done
+
+    print_info "Region Configuration:"
+    echo "  Gateway Region: $GATEWAY_REGION"
+    echo "  ChirpStack Region: $CHIRPSTACK_REGION"
+    echo "  Config File: $GATEWAY_CONFIG_FILE"
+    echo ""
+}
+
+# Complete cleanup and reset
+complete_cleanup() {
+    print_header "Complete System Cleanup"
+
+    echo -e "${RED}${BOLD}⚠️  WARNING: This will completely remove ALL LoRaWAN components!${NC}"
+    echo ""
+    echo "This will remove:"
+    echo "  • All ChirpStack containers and data"
+    echo "  • All Docker volumes and images"
+    echo "  • Gateway software and configurations"
+    echo "  • Data dashboard and logs"
+    echo "  • System services"
+    echo "  • All work directories"
+    echo ""
+    echo -e "${YELLOW}This action cannot be undone!${NC}"
+    echo ""
+
+    read -p "Are you absolutely sure? Type 'CLEANUP' to confirm: " -r
+
+    if [[ $REPLY != "CLEANUP" ]]; then
+        print_warning "Cleanup cancelled"
+        return 0
+    fi
+
+    print_status "Starting complete cleanup..."
+
+    # 1. Stop all services
+    print_progress "Stopping all services..."
+
+    # Stop ChirpStack services
+    if [ -d "$CHIRPSTACK_DIR" ]; then
+        cd "$CHIRPSTACK_DIR" && docker-compose down -v --remove-orphans 2>/dev/null || true
+    fi
+
+    # Stop gateway processes
+    sudo pkill -f lora_pkt_fwd 2>/dev/null || true
+    screen -S rak7371_gateway -X quit 2>/dev/null || true
+
+    # Stop data listener
+    sudo pkill -f mqtt_listener.py 2>/dev/null || true
+
+    # Stop systemd services if they exist
+    sudo systemctl stop rak7371-gateway 2>/dev/null || true
+    sudo systemctl stop lorawan-listener 2>/dev/null || true
+    sudo systemctl disable rak7371-gateway 2>/dev/null || true
+    sudo systemctl disable lorawan-listener 2>/dev/null || true
+
+    # 2. Remove Docker containers, volumes, and images
+    print_progress "Cleaning Docker resources..."
+
+    # Remove ChirpStack-related containers
+    docker ps -a --format "table {{.Names}}" | grep -E "(chirpstack|postgres|redis|mosquitto)" | xargs -r docker rm -f 2>/dev/null || true
+
+    # Remove all ChirpStack images
+    docker images --format "table {{.Repository}}:{{.Tag}} {{.ID}}" | grep -E "(chirpstack|postgres|redis|mosquitto)" | awk '{print $2}' | xargs -r docker rmi -f 2>/dev/null || true
+
+    # Remove volumes
+    docker volume ls -q | grep -E "(chirpstack|postgres|redis|mosquitto)" | xargs -r docker volume rm -f 2>/dev/null || true
+
+    # Clean up unused Docker resources
+    docker system prune -f 2>/dev/null || true
+    docker volume prune -f 2>/dev/null || true
+
+    # 3. Remove systemd service files
+    print_progress "Removing system services..."
+
+    sudo rm -f /etc/systemd/system/rak7371-gateway.service 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/lorawan-listener.service 2>/dev/null || true
+    sudo systemctl daemon-reload 2>/dev/null || true
+
+    # 4. Remove all work directories
+    print_progress "Removing directories..."
+
+    rm -rf "$WORK_DIR" 2>/dev/null || true
+    rm -rf ~/rak7371_gateway 2>/dev/null || true
+    rm -rf ~/chirpstack 2>/dev/null || true
+
+    # Remove any legacy directories
+    rm -rf ~/lorawan-network 2>/dev/null || true
+    rm -rf ~/rak7371 2>/dev/null || true
+
+    # 5. Clean up any remaining processes
+    print_progress "Cleaning remaining processes..."
+
+    # Kill any remaining LoRa-related processes
+    sudo pkill -f "lora_pkt_fwd\|mqtt_listener\|chirpstack" 2>/dev/null || true
+
+    # Remove any screen sessions
+    screen -wipe 2>/dev/null || true
+
+    # 6. Clean up logs and temporary files
+    print_progress "Cleaning logs and temporary files..."
+
+    # Remove any logs in common locations
+    sudo rm -rf /var/log/chirpstack* 2>/dev/null || true
+    sudo rm -rf /tmp/chirpstack* 2>/dev/null || true
+    sudo rm -rf /tmp/lorawan* 2>/dev/null || true
+
+    # 7. Clean up network interfaces and iptables (if any were created)
+    print_progress "Cleaning network configuration..."
+
+    # Remove any Docker networks created by ChirpStack
+    docker network ls --format "{{.Name}}" | grep -E "(chirpstack|lorawan)" | xargs -r docker network rm 2>/dev/null || true
+
+    # 8. Reset any system configuration changes
+    print_progress "Resetting system configuration..."
+
+    # Remove any sysctl changes (if they were permanent)
+    sudo sed -i '/vm.max_map_count=262144/d' /etc/sysctl.conf 2>/dev/null || true
+
+    # Remove Docker daemon configuration we might have added
+    if [ -f "/etc/docker/daemon.json" ]; then
+        # Only remove if it looks like our configuration
+        if grep -q "chirpstack\|lorawan" /etc/docker/daemon.json 2>/dev/null; then
+            sudo rm -f /etc/docker/daemon.json
+            sudo systemctl restart docker 2>/dev/null || true
+        fi
+    fi
+
+    # 9. Final verification
+    print_progress "Verifying cleanup..."
+
+    local cleanup_issues=0
+
+    # Check for remaining processes
+    if pgrep -f "lora_pkt_fwd\|mqtt_listener\|chirpstack" >/dev/null 2>&1; then
+        print_warning "Some processes are still running"
+        ((cleanup_issues++))
+    fi
+
+    # Check for remaining Docker containers
+    if docker ps -a --format "{{.Names}}" | grep -E "(chirpstack|postgres|redis|mosquitto)" >/dev/null 2>&1; then
+        print_warning "Some Docker containers still exist"
+        ((cleanup_issues++))
+    fi
+
+    # Check for remaining directories
+    if [ -d "$WORK_DIR" ] || [ -d ~/lorawan-network ] || [ -d ~/rak7371_gateway ]; then
+        print_warning "Some directories still exist"
+        ((cleanup_issues++))
+    fi
+
+    echo ""
+    if [ $cleanup_issues -eq 0 ]; then
+        print_success "✅ Complete cleanup successful!"
+        echo ""
+        print_info "System has been reset to clean state. You can now:"
+        echo "  • Run a fresh installation with: $0 install"
+        echo "  • Or use the interactive menu: $0"
+    else
+        print_warning "⚠️  Cleanup completed with $cleanup_issues minor issues"
+        echo ""
+        print_info "Most components removed. You may need to:"
+        echo "  • Restart your system to clear remaining processes"
+        echo "  • Manually remove any stubborn files"
+        echo "  • Check 'docker ps -a' and 'docker images' for leftovers"
+    fi
+
+    echo ""
+    print_info "Cleanup log saved to: $LOG_FILE"
 }
 
 # Create directory structure
@@ -321,9 +577,9 @@ services:
     volumes:
       - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge
     environment:
-      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/event/{{ .EventType }}
-      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/state/{{ .StateType }}
-      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/command/{{ .CommandType }}
+      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=$CHIRPSTACK_REGION/gateway/{{ .GatewayID }}/event/{{ .EventType }}
+      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=$CHIRPSTACK_REGION/gateway/{{ .GatewayID }}/state/{{ .StateType }}
+      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=$CHIRPSTACK_REGION/gateway/{{ .GatewayID }}/command/{{ .CommandType }}
 
 volumes:
   postgres_data:
@@ -352,7 +608,7 @@ servers = ["redis://redis:6379"]
 cluster = false
 
 [network]
-enabled_regions = ["eu868"]
+enabled_regions = ["$CHIRPSTACK_REGION"]
 
 [api]
 bind = "0.0.0.0:8080"
@@ -511,29 +767,18 @@ configure_packet_forwarder() {
 
     cd "$GATEWAY_DIR/sx1302_hal/packet_forwarder"
 
-    # Select appropriate configuration file based on region
-    local config_file=""
-    case $GATEWAY_REGION in
-        "EU868")
-            config_file="global_conf.json.sx1250.EU868.USB"
-            ;;
-        "US915")
-            config_file="global_conf.json.sx1250.US915.USB"
-            ;;
-        "AS923")
-            config_file="global_conf.json.sx1250.AS923.USB"
-            ;;
-        "AU915")
-            config_file="global_conf.json.sx1250.AU915.USB"
-            ;;
-        *)
-            print_warning "Unknown region $GATEWAY_REGION, using EU868"
-            config_file="global_conf.json.sx1250.EU868.USB"
-            ;;
-    esac
+    # Use the config file selected during region selection
+    local config_file="$GATEWAY_CONFIG_FILE"
+
+    print_status "Using configuration file: $config_file for $GATEWAY_REGION region"
 
     # Copy configuration file
-    cp "$config_file" global_conf.json
+    if [ -f "$config_file" ]; then
+        cp "$config_file" global_conf.json
+    else
+        print_warning "Config file $config_file not found, trying default EU868"
+        cp "global_conf.json.sx1250.EU868.USB" global_conf.json
+    fi
 
     # Update server address to point to local ChirpStack
     jq '.gateway_conf.server_address = "localhost" |
@@ -1229,31 +1474,35 @@ show_menu() {
 
     echo "━━━━━━━━━━ Quick Setup ━━━━━━━━━━"
     echo "  1) Complete Installation (First Time Setup)"
+    echo "  2) Select LoRaWAN Region"
     echo ""
     echo "━━━━━━━━ ChirpStack Server ━━━━━━━"
-    echo "  2) Install Docker"
-    echo "  3) Deploy ChirpStack"
-    echo "  4) Start ChirpStack"
-    echo "  5) Stop ChirpStack"
+    echo "  3) Install Docker"
+    echo "  4) Deploy ChirpStack"
+    echo "  5) Start ChirpStack"
+    echo "  6) Stop ChirpStack"
     echo ""
     echo "━━━━━━━━━ RAK7371 Gateway ━━━━━━━━"
-    echo "  6) Install Gateway Tools"
-    echo "  7) Setup Gateway Software"
-    echo "  8) Configure Packet Forwarder"
-    echo "  9) Detect Gateway EUI"
-    echo " 10) Register Gateway"
-    echo " 11) Start Gateway"
+    echo "  7) Install Gateway Tools"
+    echo "  8) Setup Gateway Software"
+    echo "  9) Configure Packet Forwarder"
+    echo " 10) Detect Gateway EUI"
+    echo " 11) Register Gateway"
+    echo " 12) Start Gateway"
     echo ""
     echo "━━━━━━━━ Data & Monitoring ━━━━━━━━"
-    echo " 12) Create Data Dashboard"
-    echo " 13) Start Data Listener"
-    echo " 14) View Status"
-    echo " 15) View Logs"
+    echo " 13) Create Data Dashboard"
+    echo " 14) Start Data Listener"
+    echo " 15) View Status"
+    echo " 16) View Logs"
     echo ""
     echo "━━━━━━━━━━ System ━━━━━━━━━━━━"
-    echo " 16) Create System Services"
-    echo " 17) Open ChirpStack Web UI"
-    echo " 18) Open Data Dashboard"
+    echo " 17) Create System Services"
+    echo " 18) Open ChirpStack Web UI"
+    echo " 19) Open Data Dashboard"
+    echo ""
+    echo "━━━━━━━━━━ Cleanup ━━━━━━━━━━━━"
+    echo " 20) 🗑️  Complete Cleanup (Remove Everything)"
     echo ""
     echo " 0) Exit"
     echo ""
@@ -1265,6 +1514,7 @@ show_menu() {
         1)
             # Complete installation
             check_system_requirements
+            select_region
             create_directories
             install_docker
             create_chirpstack_config
@@ -1280,23 +1530,25 @@ show_menu() {
             create_systemd_services
             show_status
             ;;
-        2) install_docker ;;
-        3) create_chirpstack_config ;;
-        4) start_chirpstack ;;
-        5) cd "$CHIRPSTACK_DIR" && docker-compose down ;;
-        6) install_gateway_tools ;;
-        7) setup_gateway_software ;;
-        8) configure_packet_forwarder ;;
-        9) detect_gateway_eui ;;
-        10) register_gateway_chirpstack ;;
-        11) start_gateway ;;
-        12) create_data_viewer ;;
-        13) start_data_listener ;;
-        14) show_status ;;
-        15) view_logs ;;
-        16) create_systemd_services ;;
-        17) xdg-open "http://localhost:8080" 2>/dev/null || echo "Open: http://localhost:8080" ;;
-        18) xdg-open "file://$DATA_DIR/index.html" 2>/dev/null || echo "Open: file://$DATA_DIR/index.html" ;;
+        2) select_region ;;
+        3) install_docker ;;
+        4) create_chirpstack_config ;;
+        5) start_chirpstack ;;
+        6) cd "$CHIRPSTACK_DIR" && docker-compose down ;;
+        7) install_gateway_tools ;;
+        8) setup_gateway_software ;;
+        9) configure_packet_forwarder ;;
+        10) detect_gateway_eui ;;
+        11) register_gateway_chirpstack ;;
+        12) start_gateway ;;
+        13) create_data_viewer ;;
+        14) start_data_listener ;;
+        15) show_status ;;
+        16) view_logs ;;
+        17) create_systemd_services ;;
+        18) xdg-open "http://localhost:8080" 2>/dev/null || echo "Open: http://localhost:8080" ;;
+        19) xdg-open "file://$DATA_DIR/index.html" 2>/dev/null || echo "Open: file://$DATA_DIR/index.html" ;;
+        20) complete_cleanup ;;
         0) exit 0 ;;
         *) print_error "Invalid option" ;;
     esac
@@ -1329,6 +1581,7 @@ main() {
         case "$1" in
             install)
                 check_system_requirements
+                select_region
                 create_directories
                 install_docker
                 create_chirpstack_config
@@ -1360,6 +1613,9 @@ main() {
             logs)
                 view_logs
                 ;;
+            cleanup)
+                complete_cleanup
+                ;;
             --help|-h)
                 echo "Usage: $0 [command]"
                 echo ""
@@ -1369,6 +1625,7 @@ main() {
                 echo "  stop       - Stop all services"
                 echo "  status     - Show system status"
                 echo "  logs       - View logs"
+                echo "  cleanup    - Complete cleanup (remove everything)"
                 echo "  (no args)  - Show interactive menu"
                 ;;
             *)
