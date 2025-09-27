@@ -439,7 +439,7 @@ create_chirpstack() {
     print_status "Creating docker-compose.yml file..."
     
     cat > "$DOCKER_COMPOSE_FILE" << 'EOF'
-version: "3.8"
+version: "3.3"
 
 services:
   mosquitto:
@@ -450,12 +450,8 @@ services:
     volumes:
       - mosquittodata:/mosquitto/data
       - mosquittologs:/mosquitto/log
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-        reservations:
-          memory: 128M
+    mem_limit: 256m
+    memswap_limit: 256m
 
   postgresql:
     image: postgres:14-alpine
@@ -484,12 +480,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-        reservations:
-          memory: 512M
+    mem_limit: 1g
+    memswap_limit: 1g
 
   redis:
     image: redis:7-alpine
@@ -503,12 +495,8 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
+    mem_limit: 512m
+    memswap_limit: 512m
 
   chirpstack-network-server:
     image: chirpstack/chirpstack-network-server:3
@@ -531,12 +519,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
+    mem_limit: 512m
+    memswap_limit: 512m
 
   chirpstack-application-server:
     image: chirpstack/chirpstack-application-server:3
@@ -560,12 +544,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
+    mem_limit: 512m
+    memswap_limit: 512m
 
   chirpstack-gateway-bridge:
     image: chirpstack/chirpstack-gateway-bridge:3
@@ -579,12 +559,8 @@ services:
         condition: service_started
     volumes:
       - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-        reservations:
-          memory: 128M
+    mem_limit: 256m
+    memswap_limit: 256m
 
 volumes:
   postgresqldata:
