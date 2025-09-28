@@ -577,9 +577,9 @@ services:
     volumes:
       - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge
     environment:
-      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=$CHIRPSTACK_REGION/gateway/{{ .GatewayID }}/event/{{ .EventType }}
-      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=$CHIRPSTACK_REGION/gateway/{{ .GatewayID }}/state/{{ .StateType }}
-      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=$CHIRPSTACK_REGION/gateway/{{ .GatewayID }}/command/{{ .CommandType }}
+      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=${CHIRPSTACK_REGION}/gateway/{{ .GatewayID }}/event/{{ .EventType }}
+      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=${CHIRPSTACK_REGION}/gateway/{{ .GatewayID }}/state/{{ .StateType }}
+      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=${CHIRPSTACK_REGION}/gateway/{{ .GatewayID }}/command/{{ .CommandType }}
 
 volumes:
   postgres_data:
@@ -594,7 +594,7 @@ EOF
 
     # Create ChirpStack configuration
     mkdir -p "$CHIRPSTACK_DIR/configuration/chirpstack"
-    cat > "$CHIRPSTACK_DIR/configuration/chirpstack/chirpstack.toml" << 'EOF'
+    cat > "$CHIRPSTACK_DIR/configuration/chirpstack/chirpstack.toml" << EOF
 [logging]
 level = "info"
 
@@ -677,13 +677,22 @@ EOF
 start_chirpstack() {
     print_header "Starting ChirpStack Services"
 
+    # Check if region is set, if not, prompt for it
+    if [ -z "$CHIRPSTACK_REGION" ] || [ "$CHIRPSTACK_REGION" = "" ]; then
+        print_warning "LoRaWAN region not configured!"
+        select_region
+        # Recreate config with the selected region
+        create_chirpstack_config
+    fi
+
     cd "$CHIRPSTACK_DIR"
 
     print_progress "Pulling Docker images..."
     docker-compose pull
 
-    print_progress "Starting services..."
-    docker-compose up -d
+    print_progress "Starting services with region: $CHIRPSTACK_REGION..."
+    # Set environment variable and start
+    CHIRPSTACK_REGION="$CHIRPSTACK_REGION" docker-compose up -d
 
     # Wait for services to be ready
     print_progress "Waiting for services to initialize..."
